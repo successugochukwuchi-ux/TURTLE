@@ -239,12 +239,50 @@ with st.sidebar:
     tg_token = st.text_input("Bot Token", type="password", placeholder="1234:ABC...")
     tg_chat  = st.text_input("Chat ID",  placeholder="-100xxxxxxxx")
 
-    if st.button("💾 Save Notifier"):
-        if tg_token and tg_chat:
-            st.session_state.notifier = TelegramNotifier(tg_token, tg_chat)
-            st.success("Notifier saved ✓")
-        else:
-            st.error("Enter both token and chat ID")
+    tg_col1, tg_col2 = st.columns(2)
+    with tg_col1:
+        if st.button("💾 Save", use_container_width=True):
+            if tg_token and tg_chat:
+                st.session_state.notifier = TelegramNotifier(tg_token, tg_chat)
+                st.success("Saved ✓")
+            else:
+                st.error("Enter token + chat ID")
+    with tg_col2:
+        if st.button("📡 Test", use_container_width=True):
+            if st.session_state.notifier:
+                ok = st.session_state.notifier.test()
+                if ok:
+                    st.success("Sent ✓")
+                else:
+                    st.error("Failed ✗")
+            elif tg_token and tg_chat:
+                # Save-and-test in one click
+                try:
+                    n = TelegramNotifier(tg_token, tg_chat)
+                    ok = n.test()
+                    if ok:
+                        st.session_state.notifier = n
+                        st.success("Sent ✓")
+                    else:
+                        st.error("Failed ✗")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+            else:
+                st.warning("Enter token + chat ID first")
+
+    # Status indicator
+    if st.session_state.notifier:
+        st.markdown(
+            '<span style="font-family:\'Share Tech Mono\',monospace;font-size:0.7rem;'
+            'color:#00cc7a;">● NOTIFIER ACTIVE</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<span style="font-family:\'Share Tech Mono\',monospace;font-size:0.7rem;'
+            'color:#3a5068;">○ NOTIFIER OFF</span>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
     refresh_secs = st.slider("Auto-refresh (sec)", 30, 300, 60, step=30)
@@ -278,7 +316,13 @@ with st.spinner("Fetching market data…"):
     df, err = load_data(ticker_mode, interval, entry_period, exit_period)
 
 if err:
-    st.error(f"Data error: {err}")
+    st.error(f"**Data error:** {err}")
+    if "binance" in str(err).lower() or "451" in str(err):
+        st.info(
+            "💡 **Binance is geo-restricted in your region.** "
+            "The app automatically tries KuCoin → Bybit → OKX → Gate.io → MEXC as fallbacks. "
+            "If all fail, check that your internet connection can reach these exchanges."
+        )
     st.stop()
 
 if df is None or df.empty:
