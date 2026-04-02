@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐢 Turtle Trader — Control Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Base ─────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #080c10;
+    --surface:  #0e1419;
+    --border:   #1a2535;
+    --text:     #c5d5e8;
+    --muted:    #3a5270;
+    --accent:   #00e5a0;
+    --red:      #ff3d5a;
+    --gold:     #f5c842;
+    --blue:     #3a8eff;
+    --font-mono: 'Share Tech Mono', monospace;
+    --font-head: 'Bebas Neue', cursive;
+    --font-body: 'DM Sans', sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Scanline texture overlay ────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.04) 2px,
+      rgba(0,0,0,0.04) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 18px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+  }
+
+  .logo {
+    font-family: var(--font-head);
+    font-size: 2rem;
+    letter-spacing: 0.05em;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo span { color: var(--accent); }
+
+  .header-meta {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.8;
+  }
+
+  /* ── Status pill ─────────────────────────────────────────────── */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    letter-spacing: 0.1em;
+  }
+
+  .status-pill.running { border-color: var(--accent); color: var(--accent); }
+  .status-pill.stopped { border-color: var(--muted);  color: var(--muted); }
+
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .running .dot { animation: blink 1.2s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  /* ── Layout ─────────────────────────────────────────────────── */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    max-width: 1280px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px;
+    gap: 20px;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .card-head {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-body { padding: 18px; }
+
+  /* ── Control panel (left col) ────────────────────────────────── */
+  .controls { grid-column: 1; grid-row: 1 / 3; }
+
+  .form-group { margin-bottom: 16px; }
+
+  label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  select, input[type="number"], input[type="text"], input[type="password"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: 8px 12px;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.2s;
+    appearance: none;
+  }
+
+  select:focus, input:focus {
+    border-color: var(--accent);
+  }
+
+  /* Toggle switch for mode */
+  .mode-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .mode-btn {
+    padding: 8px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: var(--bg);
+    color: var(--muted);
+    transition: all 0.15s;
+  }
+
+  .mode-btn.active {
+    border-color: var(--gold);
+    color: var(--gold);
+    background: rgba(245,200,66,0.07);
+  }
+
+  .mode-btn:hover:not(.active) {
+    border-color: var(--text);
+    color: var(--text);
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+    width: 100%;
+    margin-bottom: 8px;
+  }
+
+  .btn-start {
+    background: rgba(0,229,160,0.1);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .btn-start:hover { background: rgba(0,229,160,0.2); }
+
+  .btn-stop {
+    background: rgba(255,61,90,0.1);
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .btn-stop:hover { background: rgba(255,61,90,0.2); }
+
+  .btn-test {
+    background: rgba(58,142,255,0.1);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+  .btn-test:hover { background: rgba(58,142,255,0.2); }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--muted);
+  }
+  .btn-ghost:hover { border-color: var(--text); color: var(--text); }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Divider */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 18px 0;
+  }
+
+  /* ── Live metrics (right col top) ────────────────────────────── */
+  .metrics { grid-column: 2; grid-row: 1; }
+
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+  }
+
+  .metric-cell {
+    background: var(--surface);
+    padding: 20px 18px;
+  }
+
+  .metric-label {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .metric-value {
+    font-family: var(--font-head);
+    font-size: 1.8rem;
+    letter-spacing: 0.03em;
+    color: #fff;
+    line-height: 1;
+  }
+
+  .metric-value.accent { color: var(--accent); }
+  .metric-value.gold   { color: var(--gold); }
+  .metric-value.red    { color: var(--red); }
+
+  .metric-sub {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ── Signal log (right col bottom) ──────────────────────────── */
+  .signal-log { grid-column: 2; grid-row: 2; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+
+  th {
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+
+  td {
+    padding: 11px 16px;
+    border-bottom: 1px solid rgba(26,37,53,0.5);
+    color: var(--text);
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    font-weight: bold;
+  }
+  .badge-long  { background: rgba(0,229,160,0.12); color: var(--accent); border: 1px solid rgba(0,229,160,0.3); }
+  .badge-short { background: rgba(255,61,90,0.12);  color: var(--red);    border: 1px solid rgba(255,61,90,0.3); }
+  .badge-exit  { background: rgba(245,200,66,0.12); color: var(--gold);   border: 1px solid rgba(245,200,66,0.3); }
+
+  .empty-log {
+    text-align: center;
+    padding: 40px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  /* ── Toast notifications ─────────────────────────────────────── */
+  #toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 20px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s;
+    z-index: 1000;
+    max-width: 320px;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast.ok   { border-color: var(--accent); color: var(--accent); }
+  #toast.err  { border-color: var(--red);    color: var(--red); }
+
+  /* ── Scrollbar ───────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* ── Responsive ──────────────────────────────────────────────── */
+  @media (max-width: 900px) {
+    main {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto;
+      padding: 12px;
+    }
+    .controls  { grid-column: 1; grid-row: 2; }
+    .metrics   { grid-column: 1; grid-row: 1; }
+    .signal-log { grid-column: 1; grid-row: 3; }
+    .metrics-grid { grid-template-columns: repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">🐢 TURTLE <span>TRADER</span></div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div id="status-pill" class="status-pill stopped">
+      <div class="dot"></div>
+      <span id="status-text">STOPPED</span>
+    </div>
+    <div class="header-meta">
+      <div id="last-check">LAST CHECK: —</div>
+      <div id="checks-done">CHECKS: 0</div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main ────────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Left: Controls -->
+  <div class="card controls">
+    <div class="card-head">Scanner Config</div>
+    <div class="card-body">
+
+      <div class="form-group">
+        <label>Market</label>
+        <div class="mode-toggle">
+          <div class="mode-btn active" id="btn-gold" onclick="setMode('gold')">⚡ XAUUSD</div>
+          <div class="mode-btn" id="btn-crypto" onclick="setMode('crypto')">₿ BTC/USDT</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Timeframe</label>
+        <select id="interval">
+          <option value="1h">1 Hour</option>
+          <option value="4h">4 Hour</option>
+          <option value="1d">1 Day</option>
+        </select>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label>Entry Period</label>
+          <input type="number" id="entry" value="20" min="5" max="100">
+        </div>
+        <div class="form-group">
+          <label>Exit Period</label>
+          <input type="number" id="exit" value="10" min="3" max="60">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Check Interval (seconds)</label>
+        <input type="number" id="sleep" value="60" min="10" max="3600">
+      </div>
+
+      <hr class="divider">
+
+      <button class="btn btn-start" id="btn-start" onclick="startScanner()">
+        ▶ START SCANNER
+      </button>
+      <button class="btn btn-stop" id="btn-stop" onclick="stopScanner()" disabled>
+        ■ STOP SCANNER
+      </button>
+
+      <hr class="divider">
+
+      <div class="card-head" style="padding:0;margin-bottom:12px;border:none;">
+        Telegram
+      </div>
+
+      <div class="form-group">
+        <label>Bot Token</label>
+        <input type="password" id="tg-token" value="{{ tg_token }}" placeholder="1234:ABC...">
+      </div>
+      <div class="form-group">
+        <label>Chat ID</label>
+        <input type="text" id="tg-chat" value="{{ tg_chat }}" placeholder="8739979073">
+      </div>
+
+      <button class="btn btn-test" onclick="testTelegram()">
+        📡 TEST TELEGRAM
+      </button>
+      <button class="btn btn-ghost" onclick="clearLog()">
+        🗑 CLEAR SIGNAL LOG
+      </button>
+
+    </div>
+  </div>
+
+  <!-- Right top: Live metrics -->
+  <div class="card metrics">
+    <div class="card-head">Live Market Data</div>
+    <div class="metrics-grid">
+      <div class="metric-cell">
+        <div class="metric-label">Last Price</div>
+        <div class="metric-value gold" id="m-price">—</div>
+        <div class="metric-sub" id="m-asset">—</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-label">Last Signal</div>
+        <div class="metric-value accent" id="m-signal">—</div>
+        <div class="metric-sub" id="m-tf">—</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-label">Checks Done</div>
+        <div class="metric-value" id="m-checks">0</div>
+        <div class="metric-sub">this session</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-label">Scanner</div>
+        <div class="metric-value" id="m-status">OFF</div>
+        <div class="metric-sub" id="m-error" style="color:var(--red)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right bottom: Signal log -->
+  <div class="card signal-log">
+    <div class="card-head">
+      Signal Log
+      <span id="log-count" style="color:var(--text)">0 entries</span>
+    </div>
+    <div id="log-body">
+      <div class="empty-log">No signals yet — start the scanner to begin monitoring.</div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+  // ── State ────────────────────────────────────────────────────────────────
+  let mode        = 'gold';
+  let pollTimer   = null;
+
+  // Pre-fill from server-rendered values (credentials)
+  const TG_TOKEN  = document.getElementById('tg-token').value;
+  const TG_CHAT   = document.getElementById('tg-chat').value;
+
+  // ── Mode toggle ──────────────────────────────────────────────────────────
+  function setMode(m) {
+    mode = m;
+    document.getElementById('btn-gold').classList.toggle('active', m === 'gold');
+    document.getElementById('btn-crypto').classList.toggle('active', m === 'crypto');
+  }
+
+  // ── Scanner controls ─────────────────────────────────────────────────────
+  async function startScanner() {
+    const payload = {
+      mode:     mode,
+      symbol:   'BTC/USDT',
+      interval: document.getElementById('interval').value,
+      entry:    document.getElementById('entry').value,
+      exit:     document.getElementById('exit').value,
+      sleep:    document.getElementById('sleep').value,
+    };
+    const res  = await post('/api/start', payload);
+    toast(res.message, res.ok);
+    if (res.ok) {
+      document.getElementById('btn-start').disabled = true;
+      document.getElementById('btn-stop').disabled  = false;
+    }
+  }
+
+  async function stopScanner() {
+    const res = await post('/api/stop', {});
+    toast(res.message, res.ok);
+    document.getElementById('btn-start').disabled = false;
+    document.getElementById('btn-stop').disabled  = true;
+  }
+
+  // ── Telegram test ────────────────────────────────────────────────────────
+  async function testTelegram() {
+    // Push current form values first
+    await post('/api/update_config', {
+      tg_token: document.getElementById('tg-token').value,
+      tg_chat:  document.getElementById('tg-chat').value,
+    });
+    const res = await post('/api/test_telegram', {});
+    toast(res.message, res.ok);
+  }
+
+  // ── Clear log ────────────────────────────────────────────────────────────
+  async function clearLog() {
+    await post('/api/clear_log', {});
+    toast('Signal log cleared', true);
+    refreshStatus();
+  }
+
+  // ── Poll status ──────────────────────────────────────────────────────────
+  async function refreshStatus() {
+    try {
+      const data = await (await fetch('/api/status')).json();
+      updateUI(data);
+    } catch(e) {
+      console.error('Poll error', e);
+    }
+  }
+
+  function updateUI(d) {
+    // Status pill
+    const pill = document.getElementById('status-pill');
+    const txt  = document.getElementById('status-text');
+    pill.className = 'status-pill ' + (d.running ? 'running' : 'stopped');
+    txt.textContent = d.running ? 'LIVE' : 'STOPPED';
+
+    // Header meta
+    document.getElementById('last-check').textContent  = 'LAST CHECK: ' + (d.last_check || '—');
+    document.getElementById('checks-done').textContent = 'CHECKS: ' + d.checks_done;
+
+    // Metrics
+    document.getElementById('m-price').textContent   = d.last_price ? Number(d.last_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+    document.getElementById('m-asset').textContent   = d.mode === 'gold' ? 'XAUUSD' : d.symbol;
+    document.getElementById('m-signal').textContent  = d.last_signal || '—';
+    document.getElementById('m-tf').textContent      = d.interval;
+    document.getElementById('m-checks').textContent  = d.checks_done;
+    document.getElementById('m-status').textContent  = d.running ? 'LIVE' : 'OFF';
+    document.getElementById('m-error').textContent   = d.error ? '⚠ ' + d.error.slice(0,60) : '';
+
+    // Style signal value
+    const sigEl = document.getElementById('m-signal');
+    sigEl.style.color = d.last_signal?.includes('LONG') && !d.last_signal?.includes('EXIT')
+      ? 'var(--accent)' : d.last_signal?.includes('SHORT') && !d.last_signal?.includes('EXIT')
+      ? 'var(--red)' : 'var(--gold)';
+
+    // Buttons
+    document.getElementById('btn-start').disabled = d.running;
+    document.getElementById('btn-stop').disabled  = !d.running;
+
+    // Log table
+    renderLog(d.log || []);
+    document.getElementById('log-count').textContent = (d.log?.length || 0) + ' entries';
+  }
+
+  const BADGE = {
+    'ENTER_LONG':  ['badge-long',  '▲ ENTER LONG'],
+    'ENTER_SHORT': ['badge-short', '▼ ENTER SHORT'],
+    'EXIT_LONG':   ['badge-exit',  '◀ EXIT LONG'],
+    'EXIT_SHORT':  ['badge-exit',  '▶ EXIT SHORT'],
+  };
+
+  function renderLog(entries) {
+    const body = document.getElementById('log-body');
+    if (!entries.length) {
+      body.innerHTML = '<div class="empty-log">No signals yet — start the scanner to begin monitoring.</div>';
+      return;
+    }
+    const rows = entries.map(e => {
+      const [cls, label] = BADGE[e.signal] || ['', e.signal];
+      const price = Number(e.price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+      return `<tr>
+        <td>${e.timestamp}</td>
+        <td><span class="badge ${cls}">${label}</span></td>
+        <td>${e.asset}</td>
+        <td>${price}</td>
+        <td>${e.timeframe}</td>
+      </tr>`;
+    }).join('');
+    body.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Time</th><th>Signal</th><th>Asset</th><th>Price</th><th>TF</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  async function post(url, data) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    return res.json();
+  }
+
+  function toast(msg, ok) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className   = 'show ' + (ok ? 'ok' : 'err');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.className = '', 3500);
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  refreshStatus();
+  setInterval(refreshStatus, 5000);   // poll every 5s to keep UI live
+</script>
+</body>
+</html>
