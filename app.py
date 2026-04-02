@@ -223,6 +223,58 @@ def api_clear_log():
     return jsonify({"ok": True})
 
 
+@app.route("/api/chart_data")
+def api_chart_data():
+    """Return chart data for Plotly visualization with signals."""
+    # Get params from query string or use state defaults
+    mode = request.args.get("mode", state["mode"])
+    symbol = request.args.get("symbol", state["symbol"])
+    interval = request.args.get("interval", state["interval"])
+    entry = int(request.args.get("entry", state["entry"]))
+    exit_p = int(request.args.get("exit", state["exit"]))
+    
+    lookback = max(entry, exit_p) * 15  # Extra bars for better visualization
+    if mode == "gold":
+        df = fetch_gold(interval=interval, lookback_bars=lookback)
+        asset_label = "XAUUSD"
+    else:
+        df = fetch_crypto(symbol, interval=interval, lookback_bars=lookback)
+        asset_label = symbol
+    
+    df = compute_turtle_signals(df, entry_period=entry, exit_period=exit_p)
+    
+    # Convert to JSON-serializable format
+    result = {
+        "asset": asset_label,
+        "interval": interval,
+        "timestamps": [ts.strftime("%Y-%m-%d %H:%M") for ts in df.index],
+        "open": df["open"].tolist(),
+        "high": df["high"].tolist(),
+        "low": df["low"].tolist(),
+        "close": df["close"].tolist(),
+        "entry_upper": df["entry_upper"].fillna(0).tolist(),
+        "entry_lower": df["entry_lower"].fillna(0).tolist(),
+        "exit_upper": df["exit_upper"].fillna(0).tolist(),
+        "exit_lower": df["exit_lower"].fillna(0).tolist(),
+        "signals": []
+    }
+    
+    # Extract signal points
+    for idx, row in df.iterrows():
+        if row["signal"]:
+            result["signals"].append({
+                "timestamp": idx.strftime("%Y-%m-%d %H:%M"),
+                "type": row["signal"],
+                "price": float(row["close"]),
+                "entry_upper": float(row.get("entry_upper", 0)),
+                "entry_lower": float(row.get("entry_lower", 0)),
+                "exit_upper": float(row.get("exit_upper", 0)),
+                "exit_lower": float(row.get("exit_lower", 0))
+            })
+    
+    return jsonify(result)
+
+
 # ── Entry ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

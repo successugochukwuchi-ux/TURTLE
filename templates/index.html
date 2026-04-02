@@ -553,19 +553,200 @@
     </div>
   </div>
 
+  <!-- Chart section -->
+  <div class="card metrics" style="grid-column: 2; grid-row: 3;">
+    <div class="card-head">
+      Live Chart — Turtle Channels
+      <button class="btn-ghost" onclick="refreshChart()" style="padding:4px 10px;font-size:0.6rem;">↻ Refresh</button>
+    </div>
+    <div id="chart-container" style="width:100%;height:500px;"></div>
+  </div>
+
 </main>
 
 <!-- Toast -->
 <div id="toast"></div>
 
+<!-- Plotly.js CDN -->
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
 <script>
   // ── State ────────────────────────────────────────────────────────────────
   let mode        = 'gold';
   let pollTimer   = null;
+  let chartInitialized = false;
 
   // Pre-fill from server-rendered values (credentials)
   const TG_TOKEN  = document.getElementById('tg-token').value;
   const TG_CHAT   = document.getElementById('tg-chat').value;
+
+  // ── Chart Functions ──────────────────────────────────────────────────────
+  async function refreshChart() {
+    try {
+      const interval = document.getElementById('interval').value;
+      const entry = parseInt(document.getElementById('entry').value) || 20;
+      const exitP = parseInt(document.getElementById('exit').value) || 10;
+      
+      const resp = await fetch(`/api/chart_data?interval=${interval}&entry=${entry}&exit=${exitP}&mode=${mode}`);
+      const data = await resp.json();
+      
+      if (!data.timestamps || data.timestamps.length === 0) {
+        showToast('No chart data available', false);
+        return;
+      }
+      
+      // Create candlestick trace
+      const candleTrace = {
+        x: data.timestamps,
+        open: data.open,
+        high: data.high,
+        low: data.low,
+        close: data.close,
+        type: 'candlestick',
+        name: 'Price',
+        increasing: { line: { color: '#00e5a0' } },
+        decreasing: { line: { color: '#ff3d5a' } },
+      };
+      
+      // Entry channel traces
+      const entryUpperTrace = {
+        x: data.timestamps,
+        y: data.entry_upper,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Entry Upper',
+        line: { color: '#0094FF', width: 1.5 },
+      };
+      
+      const entryLowerTrace = {
+        x: data.timestamps,
+        y: data.entry_lower,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Entry Lower',
+        line: { color: '#0094FF', width: 1.5 },
+      };
+      
+      // Exit channel traces
+      const exitUpperTrace = {
+        x: data.timestamps,
+        y: data.exit_upper,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Exit Upper',
+        line: { color: '#3a8eff', width: 1, dash: 'dot' },
+      };
+      
+      const exitLowerTrace = {
+        x: data.timestamps,
+        y: data.exit_lower,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Exit Lower',
+        line: { color: '#3a8eff', width: 1, dash: 'dot' },
+      };
+      
+      // Signal markers
+      const longEntrySignals = {
+        x: [], y: [], text: [], type: 'scatter', mode: 'markers+text',
+        name: 'ENTER LONG',
+        marker: { color: '#00e5a0', size: 12, symbol: 'circle' },
+        text: [], textposition: 'top center', textfont: { color: '#00e5a0', size: 10 }
+      };
+      
+      const shortEntrySignals = {
+        x: [], y: [], text: [], type: 'scatter', mode: 'markers+text',
+        name: 'ENTER SHORT',
+        marker: { color: '#ff3d5a', size: 12, symbol: 'circle' },
+        text: [], textposition: 'bottom center', textfont: { color: '#ff3d5a', size: 10 }
+      };
+      
+      const exitLongSignals = {
+        x: [], y: [], text: [], type: 'scatter', mode: 'markers+text',
+        name: 'EXIT LONG',
+        marker: { color: '#f5c842', size: 10, symbol: 'x' },
+        text: [], textposition: 'top center', textfont: { color: '#f5c842', size: 9 }
+      };
+      
+      const exitShortSignals = {
+        x: [], y: [], text: [], type: 'scatter', mode: 'markers+text',
+        name: 'EXIT SHORT',
+        marker: { color: '#a855f7', size: 10, symbol: 'x' },
+        text: [], textposition: 'bottom center', textfont: { color: '#a855f7', size: 9 }
+      };
+      
+      // Populate signal arrays
+      data.signals.forEach(sig => {
+        if (sig.type === 'ENTER_LONG') {
+          longEntrySignals.x.push(sig.timestamp);
+          longEntrySignals.y.push(sig.price);
+          longEntrySignals.text.push('LONG');
+        } else if (sig.type === 'ENTER_SHORT') {
+          shortEntrySignals.x.push(sig.timestamp);
+          shortEntrySignals.y.push(sig.price);
+          shortEntrySignals.text.push('SHORT');
+        } else if (sig.type === 'EXIT_LONG') {
+          exitLongSignals.x.push(sig.timestamp);
+          exitLongSignals.y.push(sig.price);
+          exitLongSignals.text.push('EXIT');
+        } else if (sig.type === 'EXIT_SHORT') {
+          exitShortSignals.x.push(sig.timestamp);
+          exitShortSignals.y.push(sig.price);
+          exitShortSignals.text.push('EXIT');
+        }
+      });
+      
+      const layout = {
+        dragmode: 'pan',
+        showlegend: true,
+        legend: { orientation: 'h', y: 1.02, x: 0 },
+        margin: { t: 30, b: 40, l: 60, r: 20 },
+        xaxis: { 
+          title: 'Time',
+          rangeslider: { visible: false },
+          type: 'category'
+        },
+        yaxis: { 
+          title: 'Price',
+          autorange: true 
+        },
+        plot_bgcolor: '#0e1419',
+        paper_bgcolor: '#0e1419',
+        font: { color: '#c5d5e8', family: 'Share Tech Mono' },
+        height: 500
+      };
+      
+      const config = {
+        responsive: true,
+        displayModeBar: true,
+        modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+        scrollZoom: true
+      };
+      
+      Plotly.newPlot(
+        'chart-container',
+        [
+          candleTrace,
+          entryUpperTrace,
+          entryLowerTrace,
+          exitUpperTrace,
+          exitLowerTrace,
+          longEntrySignals,
+          shortEntrySignals,
+          exitLongSignals,
+          exitShortSignals
+        ],
+        layout,
+        config
+      );
+      
+      chartInitialized = true;
+      showToast('Chart updated', true);
+    } catch (err) {
+      console.error('Chart error:', err);
+      showToast('Failed to load chart: ' + err.message, false);
+    }
+  }
 
   // ── Mode toggle ──────────────────────────────────────────────────────────
   function setMode(m) {

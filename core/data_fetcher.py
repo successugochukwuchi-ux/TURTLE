@@ -196,8 +196,12 @@ def fetch_crypto(
         raise ImportError("ccxt is not installed. Run: pip install ccxt")
 
     tf    = _CCXT_INTERVAL_MAP.get(interval, "1h")
-    order = ([preferred_exchange] if preferred_exchange else []) + _CRYPTO_EXCHANGES
-    seen, order = set(), [x for x in order if not (x in seen or seen.add(x))]
+    order_list = ([preferred_exchange] if preferred_exchange else []) + _CRYPTO_EXCHANGES
+    seen, order = set(), []
+    for x in order_list:
+        if x not in seen:
+            seen.add(x)
+            order.append(x)
 
     last_err = None
     for ex_id in order:
