@@ -1,4 +1,4 @@
-```
+```gitignore
 # Python
 __pycache__/
 *.pyc
@@ -6,20 +6,24 @@ __pycache__/
 *.pyd
 
 # Dependencies
-venv/
 .venv/
+venv/
+env/
+Pipfile.lock
+poetry.lock
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
 .env
 .env.local
 *.env.*
-
-# Logs
-*.log
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# Streamlit
-.streamlit/
 ```
