@@ -436,8 +436,12 @@
       <div class="form-group">
         <label>Timeframe</label>
         <select id="interval">
-          <option value="1h">1 Hour</option>
-          <option value="4h">4 Hour</option>
+          <option value="1m">1 Minute</option>
+          <option value="5m">5 Minutes</option>
+          <option value="15m">15 Minutes</option>
+          <option value="30m">30 Minutes</option>
+          <option value="1h" selected>1 Hour</option>
+          <option value="4h">4 Hours</option>
           <option value="1d">1 Day</option>
         </select>
       </div>
@@ -556,10 +560,13 @@
   <!-- Chart section -->
   <div class="card metrics" style="grid-column: 2; grid-row: 3;">
     <div class="card-head">
-      Live Chart — Turtle Channels
-      <button class="btn-ghost" onclick="refreshChart()" style="padding:4px 10px;font-size:0.6rem;">↻ Refresh</button>
+      <span>Live Chart — Turtle Channels</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span id="chartLastUpdate" style="font-size:0.55rem;color:var(--muted);">Updating...</span>
+        <button class="btn-ghost" onclick="refreshChart()" style="padding:4px 10px;font-size:0.6rem;">↻ Refresh</button>
+      </div>
     </div>
-    <div id="chart-container" style="width:100%;height:500px;"></div>
+    <div id="chart-container" style="width:100%;height:600px;"></div>
   </div>
 
 </main>
@@ -699,28 +706,47 @@
       const layout = {
         dragmode: 'pan',
         showlegend: true,
-        legend: { orientation: 'h', y: 1.02, x: 0 },
+        legend: { 
+          orientation: 'h', 
+          y: 1.02, 
+          x: 0,
+          font: { size: 10, color: '#c5d5e8' }
+        },
         margin: { t: 30, b: 40, l: 60, r: 20 },
         xaxis: { 
-          title: 'Time',
+          title: '',
           rangeslider: { visible: false },
-          type: 'category'
+          type: 'category',
+          gridcolor: '#1a2535',
+          linecolor: '#1a2535',
+          tickfont: { size: 10, color: '#c5d5e8' }
         },
         yaxis: { 
           title: 'Price',
-          autorange: true 
+          autorange: true,
+          gridcolor: '#1a2535',
+          linecolor: '#1a2535',
+          tickfont: { size: 11, color: '#c5d5e8' }
         },
         plot_bgcolor: '#0e1419',
         paper_bgcolor: '#0e1419',
         font: { color: '#c5d5e8', family: 'Share Tech Mono' },
-        height: 500
+        height: 600,
+        hovermode: 'x unified',
+        hoverlabel: {
+          bgcolor: '#1a2535',
+          bordercolor: '#3a5270',
+          font: { size: 11, color: '#c5d5e8', family: 'Share Tech Mono' }
+        }
       };
       
       const config = {
         responsive: true,
         displayModeBar: true,
-        modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-        scrollZoom: true
+        modeBarButtonsToRemove: ['lasso2d', 'select2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
+        scrollZoom: true,
+        doubleClick: 'reset',
+        showTips: false
       };
       
       Plotly.newPlot(
@@ -741,10 +767,32 @@
       );
       
       chartInitialized = true;
+      
+      // Update last update timestamp
+      const now = new Date();
+      document.getElementById('chartLastUpdate').textContent = 'Updated: ' + now.toLocaleTimeString();
+      
       showToast('Chart updated', true);
     } catch (err) {
       console.error('Chart error:', err);
       showToast('Failed to load chart: ' + err.message, false);
+    }
+  }
+  
+  // Auto-refresh chart every second
+  let chartAutoRefreshTimer = null;
+  
+  function startChartAutoRefresh() {
+    if (chartAutoRefreshTimer) clearInterval(chartAutoRefreshTimer);
+    chartAutoRefreshTimer = setInterval(() => {
+      refreshChart();
+    }, 1000);
+  }
+  
+  function stopChartAutoRefresh() {
+    if (chartAutoRefreshTimer) {
+      clearInterval(chartAutoRefreshTimer);
+      chartAutoRefreshTimer = null;
     }
   }
 
@@ -897,6 +945,22 @@
   // ── Init ─────────────────────────────────────────────────────────────────
   refreshStatus();
   setInterval(refreshStatus, 5000);   // poll every 5s to keep UI live
+  
+  // Initialize chart and start auto-refresh
+  refreshChart();
+  startChartAutoRefresh();
+  
+  // Re-fetch chart when timeframe changes
+  document.getElementById('interval').addEventListener('change', () => {
+    refreshChart();
+  });
+  
+  // Re-fetch chart when mode changes
+  const originalSetMode = setMode;
+  setMode = function(m) {
+    originalSetMode(m);
+    refreshChart();
+  };
 </script>
 </body>
 </html>
