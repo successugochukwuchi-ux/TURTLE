@@ -420,6 +420,21 @@ with st.sidebar:
     
     st.divider()
     
+    # Test Telegram Button
+    if tg_token and tg_chat:
+        if st.button("📬 Test Telegram", type="secondary", use_container_width=True):
+            try:
+                notifier = TelegramNotifier(tg_token, tg_chat)
+                test_result = notifier.test()
+                if test_result:
+                    st.success("✅ Test message sent successfully!")
+                else:
+                    st.error("❌ Telegram API returned an error")
+            except Exception as e:
+                st.error(f"❌ Test failed: {str(e)}")
+    
+    st.divider()
+    
     col1, col2 = st.columns(2)
     with col1:
         if st.button("▶️ Start", type="primary", use_container_width=True):
