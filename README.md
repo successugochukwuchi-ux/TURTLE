@@ -1,75 +1,84 @@
-# 🐢 Turtle Trader — Web Control Panel
+# 🐢 Turtle Trader - Streamlit Edition
 
-A Flask-based control panel for the Turtle Trading scanner. Runs the signal loop
-in a background thread — **no terminal needed, works 24/7**.
+Real-time Turtle Trading Channel scanner with confidence levels, stop loss & take profit suggestions. Built for deployment on Streamlit Community Cloud.
 
 ## Features
-- Start / Stop the scanner from the browser
-- Switch between XAUUSD and BTC/USDT
-- Adjust timeframe, entry/exit periods, check interval
-- Live signal log (auto-refreshes every 5s)
-- Telegram test button
-- Ready for Railway or Render
 
----
+- **Real-time Scanning**: Continuously monitors XAUUSD (Gold) or Crypto markets
+- **Turtle Trading Strategy**: Implements the classic Turtle Trading Channel breakout system
+- **Confidence Levels**: Each signal includes a 0-100% confidence score based on:
+  - Breakout strength
+  - Channel width (narrower = stronger)
+  - Trend consistency
+- **Risk Management**: Automatic calculation of:
+  - Suggested Stop Loss (based on channel boundaries & ATR)
+  - Take Profit targets (2:1 and 3:1 risk-reward ratios)
+  - Risk-reward ratios displayed for each target
+- **Interactive Charts**: Plotly candlestick charts with Turtle channels overlay
+- **Telegram Alerts**: Optional real-time notifications to your Telegram
+- **Signal History**: Track all signals with full details, exportable to CSV
 
-## Deploy to Render (Free, 24/7 with UptimeRobot)
+## Deployment on Streamlit Community Cloud
 
-### 1. Push to GitHub
-```bash
-git init
-git add .
-git commit -m "init"
-git remote add origin https://github.com/YOUR_USERNAME/turtle-trader-gui.git
-git push -u origin main
-```
+1. **Push to GitHub**: Upload this repository to your GitHub account
 
-### 2. Create Render Web Service
-1. Go to [render.com](https://render.com) → **New** → **Web Service**
-2. Connect your GitHub repo
-3. Render auto-detects everything from `render.yaml` — just click **Deploy**
-4. You get a free subdomain: `your-app.onrender.com`
+2. **Deploy on Streamlit Cloud**:
+   - Go to [share.streamlit.io](https://share.streamlit.io)
+   - Click "New app"
+   - Select your repository and branch
+   - Set Main file path: `app.py`
+   - Click "Deploy!"
 
-### 3. Prevent sleeping with UptimeRobot (free)
-Render's free tier sleeps after 15 min of no traffic. Fix:
-1. Go to [uptimerobot.com](https://uptimerobot.com) → create free account
-2. **New Monitor** → HTTP(s) → paste your `your-app.onrender.com` URL
-3. Set interval to **5 minutes** → Save
-4. UptimeRobot pings your app every 5 min — it never sleeps
-
-### 4. Open your URL — done
-Click **▶ START SCANNER**, close the browser.
-Telegram alerts keep arriving 24/7.
-
----
-
-## Deploy to Railway (Alternative, $5/mo for 24/7)
-
-1. Go to [railway.app](https://railway.app) → **New Project** → Deploy from GitHub
-2. Settings → Networking → **Generate Domain**
-3. Free tier sleeps — upgrade to Hobby ($5/mo) to avoid it
-
----
+3. **Configure Settings** (in the app sidebar):
+   - Select asset type (Gold or Crypto)
+   - Choose timeframe and Turtle parameters
+   - Add Telegram Bot token and Chat ID for alerts (optional)
+   - Add TradingView credentials for premium data (optional)
 
 ## Local Development
+
 ```bash
+# Install dependencies
 pip install -r requirements.txt
-python app.py
-# Open http://localhost:5000
+
+# Run the app
+streamlit run app.py
 ```
 
----
+## Configuration
 
-## Credentials
-Hardcoded in `app.py`:
-```python
-TG_TOKEN = "your_token_here"
-TG_CHAT  = "your_chat_id_here"
-```
+### Turtle Parameters
+- **Entry Period** (default: 20): Lookback period for entry channel
+- **Exit Period** (default: 10): Lookback period for exit channel
 
----
+### Scanner Settings
+- **Scan Interval**: How often to check for new signals (10-300 seconds)
 
-## Important Notes
-- Always use **1 gunicorn worker** — the background scanner thread must live in the same process
-- Signal log persists to `signals.json` on disk (resets on redeploy)
-- Both `render.yaml` and `railway.json` + `Procfile` are included — works on either platform
+### Telegram Integration
+1. Create a bot via [@BotFather](https://t.me/BotFather)
+2. Get your bot token
+3. Get your chat ID (use [@userinfobot](https://t.me/userinfobot))
+4. Enter both in the sidebar
+
+## Signal Types
+
+- 🟢 **ENTER_LONG**: Buy signal - price broke above entry channel
+- 🔴 **ENTER_SHORT**: Sell signal - price broke below entry channel  
+- 🟡 **EXIT_LONG**: Close long position - price broke below exit channel
+- 🟡 **EXIT_SHORT**: Close short position - price broke above exit channel
+
+## How Confidence is Calculated
+
+The confidence score (0-100%) is based on three factors:
+
+1. **Breakout Strength** (0-40 points): How far price moved beyond the channel
+2. **Channel Width** (0-30 points): Narrower channels indicate stronger breakouts
+3. **Trend Consistency** (0-30 points): Recent price action alignment with signal direction
+
+## Disclaimer
+
+This tool is for educational and informational purposes only. Trading involves substantial risk of loss. Past performance does not guarantee future results. Always do your own research and consider consulting with a qualified financial advisor.
+
+## License
+
+MIT License
