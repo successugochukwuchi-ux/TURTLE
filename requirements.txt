@@ -5,3 +5,5 @@ ccxt>=4.3.0
 pandas>=2.0.0
 numpy>=1.26.0
 requests>=2.31.0
+tvdatafeed-enhanced>=2.2.1
+websocket-client>=1.7.0

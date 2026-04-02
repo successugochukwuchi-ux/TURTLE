@@ -27,6 +27,8 @@ app = Flask(__name__)
 
 # ── Hardcoded credentials (edit here) ────────────────────────────────────────
 TG_TOKEN = "8639500812:AAG2cLSiKyRVwazanOlN--PInxu4-m58ES0"
+TV_USERNAME = ""  # your TradingView username
+TV_PASSWORD = ""  # your TradingView password
 TG_CHAT  = "8739979073"
 
 # ── Shared state (thread-safe via lock) ──────────────────────────────────────
@@ -47,6 +49,8 @@ state = {
     "checks_done":  0,
     "tg_token":     TG_TOKEN,
     "tg_chat":      TG_CHAT,
+    "tv_username":  TV_USERNAME,
+    "tv_password":  TV_PASSWORD,
 }
 
 sig_log  = SignalLog(max_entries=200, persist_path="signals.json")
@@ -68,11 +72,18 @@ def scanner_loop():
                 interval = state["interval"]
                 entry    = state["entry"]
                 exit_p   = state["exit"]
-                tg_token = state["tg_token"]
-                tg_chat  = state["tg_chat"]
-                sleep_s  = state["sleep"]
+                tg_token    = state["tg_token"]
+                tg_chat     = state["tg_chat"]
+                tv_username = state["tv_username"]
+                tv_password = state["tv_password"]
+                sleep_s     = state["sleep"]
 
             notifier = TelegramNotifier(tg_token, tg_chat) if (tg_token and tg_chat) else NullNotifier()
+
+            # Inject TV credentials into the data_fetcher module at runtime
+            import core.data_fetcher as _df_mod
+            _df_mod.TV_USERNAME = tv_username
+            _df_mod.TV_PASSWORD = tv_password
 
             lookback = max(entry, exit_p) * 10
             if mode == "gold":
@@ -199,6 +210,10 @@ def api_update_config():
             state["tg_token"] = data["tg_token"]
         if "tg_chat" in data:
             state["tg_chat"] = data["tg_chat"]
+        if "tv_username" in data:
+            state["tv_username"] = data["tv_username"]
+        if "tv_password" in data:
+            state["tv_password"] = data["tv_password"]
     return jsonify({"ok": True})
 
 
