@@ -485,6 +485,29 @@
       <button class="btn btn-test" onclick="testTelegram()">
         📡 TEST TELEGRAM
       </button>
+
+      <hr class="divider">
+
+      <div class="card-head" style="padding:0;margin-bottom:12px;border:none;">
+        TradingView (optional)
+      </div>
+      <p style="font-family:var(--font-mono);font-size:0.62rem;color:var(--muted);margin-bottom:12px;line-height:1.6;">
+        Add your TV credentials for more accurate XAUUSD data (OANDA feed). Works without login but may be limited.
+      </p>
+      <div class="form-group">
+        <label>TV Username</label>
+        <input type="text" id="tv-username" placeholder="tradingview_username">
+      </div>
+      <div class="form-group">
+        <label>TV Password</label>
+        <input type="password" id="tv-password" placeholder="••••••••">
+      </div>
+      <button class="btn btn-ghost" onclick="saveTVCredentials()">
+        💾 SAVE TV CREDENTIALS
+      </button>
+
+      <hr class="divider">
+
       <button class="btn btn-ghost" onclick="clearLog()">
         🗑 CLEAR SIGNAL LOG
       </button>
