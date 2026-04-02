@@ -1,7 +1,40 @@
+```python
+# Compiled Python files
+*.pyc
 __pycache__/
-*.py[cod]
-.env
+
+# Virtual environments
 venv/
 .venv/
-signals.json
+.env
+.env.local
+*.env.*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and temporary files
 *.log
+*.tmp
+
+# Build artifacts
+dist/
+build/
+target/
+*.out
+
+# Dependencies
+node_modules/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
+# System files
+.DS_Store
+Thumbs.db
+```
