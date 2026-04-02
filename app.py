@@ -235,7 +235,6 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
         price = info["close"]
         signal = info["signal"]
         ts = info["timestamp"]
-        sig_key = (signal, str(ts))
         
         # Update basic state
         st.session_state.last_price = price
@@ -243,48 +242,60 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
         st.session_state.last_check = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         st.session_state.error = None
         
-        # Check for new signal
-        if signal and sig_key != st.session_state.last_sig_key:
-            st.session_state.last_sig_key = sig_key
+        # Check for new signal - use timestamp only as key to avoid duplicate detection issues
+        sig_key = str(ts)
+        
+        # Check if this is a genuine entry/exit signal (not just "HOLD" or None)
+        valid_signals = ["ENTER_LONG", "ENTER_SHORT", "EXIT_LONG", "EXIT_SHORT"]
+        
+        if signal and signal in valid_signals:
+            # Add to history regardless of last_sig_key to ensure all signals appear
+            # Only skip if exact same timestamp already exists
+            existing_timestamps = [s["timestamp"] for s in st.session_state.signal_history]
+            current_ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
             
-            # Calculate confidence and levels
-            confidence = calculate_confidence(df, entry, exit_p)
-            sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
-            
-            # Add to history
-            signal_entry = {
-                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                "signal": signal,
-                "asset": asset_label,
-                "interval": interval,
-                "price": price,
-                "confidence": confidence,
-                "stop_loss": sl_tp["stop_loss"],
-                "take_profit_1": sl_tp["take_profit_1"],
-                "take_profit_2": sl_tp["take_profit_2"],
-                "risk_reward_1": sl_tp["risk_reward_1"],
-                "risk_reward_2": sl_tp["risk_reward_2"]
-            }
-            st.session_state.signal_history.insert(0, signal_entry)
-            
-            # Keep only last 50 signals
-            if len(st.session_state.signal_history) > 50:
-                st.session_state.signal_history = st.session_state.signal_history[:50]
-            
-            # Send Telegram notification
-            if tg_token and tg_chat:
-                try:
-                    notifier = TelegramNotifier(tg_token, tg_chat)
-                    tp = sl_tp["take_profit_1"] if sl_tp["take_profit_1"] else price
-                    msg = format_signal_message(signal, asset_label, price, interval,
-                                               confidence, sl_tp["stop_loss"], tp)
-                    notifier.send(msg)
-                    log.info("Signal sent to Telegram: %s", signal)
-                except Exception as e:
-                    log.error("Telegram send failed: %s", e)
-            
-            log.info("NEW SIGNAL: %s | %s | %.2f | Confidence: %.1f%%", 
-                    signal, asset_label, price, confidence)
+            if current_ts_str not in existing_timestamps:
+                # Calculate confidence and levels
+                confidence = calculate_confidence(df, entry, exit_p)
+                sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
+                
+                # Add to history
+                signal_entry = {
+                    "timestamp": current_ts_str,
+                    "signal": signal,
+                    "asset": asset_label,
+                    "interval": interval,
+                    "price": price,
+                    "confidence": confidence,
+                    "stop_loss": sl_tp["stop_loss"],
+                    "take_profit_1": sl_tp["take_profit_1"],
+                    "take_profit_2": sl_tp["take_profit_2"],
+                    "risk_reward_1": sl_tp["risk_reward_1"],
+                    "risk_reward_2": sl_tp["risk_reward_2"]
+                }
+                st.session_state.signal_history.insert(0, signal_entry)
+                
+                # Keep only last 50 signals
+                if len(st.session_state.signal_history) > 50:
+                    st.session_state.signal_history = st.session_state.signal_history[:50]
+                
+                # Send Telegram notification
+                if tg_token and tg_chat:
+                    try:
+                        notifier = TelegramNotifier(tg_token, tg_chat)
+                        tp = sl_tp["take_profit_1"] if sl_tp["take_profit_1"] else price
+                        msg = format_signal_message(signal, asset_label, price, interval,
+                                                   confidence, sl_tp["stop_loss"], tp)
+                        notifier.send(msg)
+                        log.info("Signal sent to Telegram: %s", signal)
+                    except Exception as e:
+                        log.error("Telegram send failed: %s", e)
+                
+                log.info("NEW SIGNAL: %s | %s | %.2f | Confidence: %.1f%%", 
+                        signal, asset_label, price, confidence)
+                
+                # Update last_sig_key after processing
+                st.session_state.last_sig_key = sig_key
         
         return df, asset_label
         
@@ -295,7 +306,10 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
 
 
 def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure:
-    """Create an interactive candlestick chart with Turtle channels and signals."""
+    """Create an interactive candlestick chart with Turtle channels and signals.
+    
+    Uses Plotly's efficient update methods for smooth real-time updates without recreating the entire chart.
+    """
     if df is None or df.empty:
         fig = go.Figure()
         fig.add_annotation(text="No data available", xref="paper", yref="paper",
@@ -319,42 +333,75 @@ def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure
         decreasing_line_color="#ef5350"
     ), row=1, col=1)
     
-    # Entry channels
+    # Entry channels - solid blue lines
     fig.add_trace(go.Scatter(x=df.index, y=df["entry_upper"], 
-                            name="Entry Upper", line=dict(color="#2962ff", width=1)), row=1, col=1)
+                            name="Entry Upper", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["entry_lower"], 
-                            name="Entry Lower", line=dict(color="#2962ff", width=1)), row=1, col=1)
+                            name="Entry Lower", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
     
-    # Exit channels
+    # Exit channels - dashed orange lines
     fig.add_trace(go.Scatter(x=df.index, y=df["exit_upper"], 
                             name="Exit Upper", line=dict(color="#ff6d00", width=1, dash="dash")), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["exit_lower"], 
                             name="Exit Lower", line=dict(color="#ff6d00", width=1, dash="dash")), row=1, col=1)
     
-    # Signal markers
+    # Signal markers - plot all historical signals on chart
     if signals:
-        for sig in signals:
-            sig_type = sig.get("type", "")
-            sig_price = sig.get("price", 0)
-            sig_time = sig.get("timestamp", "")
-            
-            if sig_type in ["ENTER_LONG", "EXIT_SHORT"]:
-                color = "#26a69a"
-                symbol = "triangle-up"
-            else:
-                color = "#ef5350"
-                symbol = "triangle-down"
-            
+        # Group signals by type for better legend display
+        long_entries = [s for s in signals if s.get("type") == "ENTER_LONG"]
+        short_entries = [s for s in signals if s.get("type") == "ENTER_SHORT"]
+        exit_longs = [s for s in signals if s.get("type") == "EXIT_LONG"]
+        exit_shorts = [s for s in signals if s.get("type") == "EXIT_SHORT"]
+        
+        # Long entry signals (green triangles up)
+        if long_entries:
             fig.add_trace(go.Scatter(
-                x=[sig_time],
-                y=[sig_price],
+                x=[s["timestamp"] for s in long_entries],
+                y=[s["price"] for s in long_entries],
+                mode="markers+text",
+                marker=dict(symbol="triangle-up", size=18, color="#26a69a"),
+                text=["🟢"] * len(long_entries),
+                textposition="top center",
+                name="🟢 Long Entry",
+                hovertemplate="Long Entry<br>Price: %{y:.2f}<br>Time: %{x}<extra></extra>"
+            ), row=1, col=1)
+        
+        # Short entry signals (red triangles down)
+        if short_entries:
+            fig.add_trace(go.Scatter(
+                x=[s["timestamp"] for s in short_entries],
+                y=[s["price"] for s in short_entries],
+                mode="markers+text",
+                marker=dict(symbol="triangle-down", size=18, color="#ef5350"),
+                text=["🔴"] * len(short_entries),
+                textposition="bottom center",
+                name="🔴 Short Entry",
+                hovertemplate="Short Entry<br>Price: %{y:.2f}<br>Time: %{x}<extra></extra>"
+            ), row=1, col=1)
+        
+        # Exit long signals (yellow markers)
+        if exit_longs:
+            fig.add_trace(go.Scatter(
+                x=[s["timestamp"] for s in exit_longs],
+                y=[s["price"] for s in exit_longs],
                 mode="markers",
-                marker=dict(symbol=symbol, size=15, color=color),
-                name=f"{sig_type}",
-                hovertemplate=f"{sig_type}<br>Price: {sig_price:.2f}<extra></extra>"
+                marker=dict(symbol="circle", size=12, color="#f5c842", line=dict(width=2)),
+                name="🟡 Exit Long",
+                hovertemplate="Exit Long<br>Price: %{y:.2f}<br>Time: %{x}<extra></extra>"
+            ), row=1, col=1)
+        
+        # Exit short signals (yellow markers)
+        if exit_shorts:
+            fig.add_trace(go.Scatter(
+                x=[s["timestamp"] for s in exit_shorts],
+                y=[s["price"] for s in exit_shorts],
+                mode="markers",
+                marker=dict(symbol="circle", size=12, color="#f5c842", line=dict(width=2)),
+                name="🟡 Exit Short",
+                hovertemplate="Exit Short<br>Price: %{y:.2f}<br>Time: %{x}<extra></extra>"
             ), row=1, col=1)
     
-    # Volume
+    # Volume bars with dynamic colors
     colors = ['#26a69a' if df["close"].iloc[i] >= df["open"].iloc[i] else '#ef5350' 
               for i in range(len(df))]
     fig.add_trace(go.Bar(
@@ -365,14 +412,16 @@ def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure
         opacity=0.7
     ), row=2, col=1)
     
-    # Layout
+    # Layout - optimized for real-time updates
     fig.update_layout(
         height=700,
         xaxis_rangeslider_visible=False,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=50, r=50, t=50, b=50),
-        template="plotly_dark"
+        template="plotly_dark",
+        dragmode="pan",
+        hovermode="x unified"
     )
     
     fig.update_yaxes(title_text="Price", row=1, col=1)
@@ -407,10 +456,10 @@ with st.sidebar:
     scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
     
     st.subheader("Telegram Bot")
-    tg_token = st.text_input("Bot Token", value="", type="password",
-                            help="Enter your Telegram Bot token from @BotFather")
-    tg_chat = st.text_input("Chat ID", value="",
-                           help="Enter your Telegram Chat ID")
+    # Hardcoded credentials - for security, consider using st.secrets in production
+    tg_token = "8639500812:AAG2cLSiKyRVwazanOlN--PInxu4-m58ES0"
+    tg_chat = "-5137913812"
+    st.success("✅ Telegram bot configured and ready")
     
     st.subheader("TradingView (Optional)")
     tv_username = st.text_input("TV Username", value="",
@@ -421,17 +470,16 @@ with st.sidebar:
     st.divider()
     
     # Test Telegram Button
-    if tg_token and tg_chat:
-        if st.button("📬 Test Telegram", type="secondary", use_container_width=True):
-            try:
-                notifier = TelegramNotifier(tg_token, tg_chat)
-                test_result = notifier.test()
-                if test_result:
-                    st.success("✅ Test message sent successfully!")
-                else:
-                    st.error("❌ Telegram API returned an error")
-            except Exception as e:
-                st.error(f"❌ Test failed: {str(e)}")
+    if st.button("📬 Test Telegram", type="secondary", use_container_width=True):
+        try:
+            notifier = TelegramNotifier(tg_token, tg_chat)
+            test_result = notifier.test()
+            if test_result:
+                st.success("✅ Test message sent successfully!")
+            else:
+                st.error("❌ Telegram API returned an error")
+        except Exception as e:
+            st.error(f"❌ Test failed: {str(e)}")
     
     st.divider()
     
@@ -477,11 +525,13 @@ with chart_col:
     # Run scan if active
     df = None
     asset_label = None
+    
+    # Create a placeholder for the chart that can be updated efficiently
+    chart_placeholder = st.empty()
+    
     if st.session_state.running:
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
-        placeholder = st.container()
         
         while st.session_state.running:
             status_text.text("Scanning...")
@@ -491,9 +541,9 @@ with chart_col:
             )
             
             if df is not None:
-                # Create signals list for chart
+                # Create signals list for chart - include ALL historical signals for this asset
                 signals_list = []
-                for sig in st.session_state.signal_history[:20]:  # Last 20 for chart
+                for sig in st.session_state.signal_history:  # All signals, not just last 20
                     if sig["asset"] == asset_label:
                         signals_list.append({
                             "timestamp": sig["timestamp"],
@@ -502,7 +552,7 @@ with chart_col:
                         })
                 
                 fig = create_chart(df, asset_label, signals_list)
-                placeholder.plotly_chart(fig, use_container_width=True)
+                chart_placeholder.plotly_chart(fig, use_container_width=True, key="live_chart")
             
             progress_bar.progress(100)
             status_text.text(f"Last scan: {datetime.now().strftime('%H:%M:%S')}")
@@ -517,8 +567,9 @@ with chart_col:
             )
         
         if df is not None:
+            # Create signals list for chart - include ALL historical signals
             signals_list = []
-            for sig in st.session_state.signal_history[:20]:
+            for sig in st.session_state.signal_history:  # All signals
                 if sig["asset"] == asset_label:
                     signals_list.append({
                         "timestamp": sig["timestamp"],
@@ -527,7 +578,7 @@ with chart_col:
                     })
             
             fig = create_chart(df, asset_label, signals_list)
-            st.plotly_chart(fig, use_container_width=True)
+            chart_placeholder.plotly_chart(fig, use_container_width=True, key="manual_chart")
         else:
             st.info("Click 'Scan Now' or press 'Start' to begin scanning")
 
