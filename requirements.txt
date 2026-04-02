@@ -1,5 +1,4 @@
-flask>=3.0.0
-gunicorn>=21.2.0
+streamlit>=1.30.0
 yfinance>=0.2.40
 ccxt>=4.3.0
 pandas>=2.0.0
