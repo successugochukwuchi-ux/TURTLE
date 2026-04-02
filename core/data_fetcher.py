@@ -15,7 +15,7 @@ import yfinance as yf
 
 # yfinance ≥0.2 returns a MultiIndex (field, ticker); ≥0.2.40 also has
 # multi_level_index kwarg.  We handle both layouts in _clean_yf().
-_GOLD_TICKERS = ["XAUUSD=X","GC=F"]
+_GOLD_TICKERS = ["GC=F", "XAUUSD=X"]
 
 _INTERVAL_MAP_YF = {
     "1m": "1m",  "5m": "5m",  "15m": "15m",
