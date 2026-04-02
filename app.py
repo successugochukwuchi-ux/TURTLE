@@ -552,7 +552,8 @@ with chart_col:
                         })
                 
                 fig = create_chart(df, asset_label, signals_list)
-                chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"live_chart_{asset_label}")
+                chart_placeholder.empty()  # Clear previous chart
+                chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"live_chart_{asset_label}_{int(time.time())}")
             
             progress_bar.progress(100)
             status_text.text(f"Last scan: {datetime.now().strftime('%H:%M:%S')}")
@@ -578,7 +579,8 @@ with chart_col:
                     })
             
             fig = create_chart(df, asset_label, signals_list)
-            chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"manual_chart_{asset_label}")
+            chart_placeholder.empty()  # Clear previous chart
+            chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"manual_chart_{asset_label}_{int(time.time())}")
         else:
             st.info("Click 'Scan Now' or press 'Start' to begin scanning")
 
