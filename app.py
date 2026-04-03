@@ -1,6 +1,6 @@
 """
 Turtle Trader — Streamlit App for Community Cloud
-Real-time Turtle Trading scanner with confidence levels, stop loss & take profit suggestions.
+Real-time multi-strategy trading scanner with confidence levels, stop loss & take profit suggestions.
 """
 
 import streamlit as st
@@ -13,7 +13,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from core.data_fetcher import fetch_gold, fetch_crypto
-from core.turtle_logic import compute_turtle_signals, get_latest_signal
+from core.strategies import (
+    compute_strategy_signals, 
+    get_latest_signal, 
+    STRATEGIES, 
+    get_strategy_params
+)
 from utils.notifier import TelegramNotifier
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -47,6 +52,10 @@ if "last_sig_key" not in st.session_state:
     st.session_state.last_sig_key = None
 if "error" not in st.session_state:
     st.session_state.error = None
+if "selected_strategy" not in st.session_state:
+    st.session_state.selected_strategy = "donchian"
+if "strategy_params" not in st.session_state:
+    st.session_state.strategy_params = {}
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -212,8 +221,8 @@ def format_signal_message(signal: str, asset: str, price: float, interval: str,
     )
 
 
-def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: int,
-                     tg_token: str, tg_chat: str, tv_username: str, tv_password: str):
+def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
+                     strategy_params: dict, tg_token: str, tg_chat: str, tv_username: str, tv_password: str):
     """Run a single scan iteration and update session state."""
     try:
         # Inject TV credentials
@@ -221,7 +230,12 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
         _df_mod.TV_USERNAME = tv_username
         _df_mod.TV_PASSWORD = tv_password
         
-        lookback = max(entry, exit_p) * 15
+        # Calculate lookback based on strategy params
+        numeric_params = [v for v in strategy_params.values() if isinstance(v, (int, float))]
+        max_period = max(numeric_params) if numeric_params else 50
+        if max_period < 1:  # Handle threshold-like params (e.g., 0.05)
+            max_period = int(50 / max_period) if max_period > 0 else 50
+        lookback = int(max_period * 25)
         if mode == "gold":
             df = fetch_gold(interval=interval, lookback_bars=lookback)
             asset_label = "XAUUSD"
@@ -229,7 +243,7 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
             df = fetch_crypto(symbol, interval=interval, lookback_bars=lookback)
             asset_label = symbol
         
-        df = compute_turtle_signals(df, entry_period=entry, exit_period=exit_p)
+        df = compute_strategy_signals(df, strategy=strategy, **strategy_params)
         info = get_latest_signal(df)
         
         price = info["close"]
@@ -256,8 +270,8 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
             
             if current_ts_str not in existing_timestamps:
                 # Calculate confidence and levels
-                confidence = calculate_confidence(df, entry, exit_p)
-                sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
+                confidence = calculate_confidence(df)
+                sl_tp = calculate_stop_loss_take_profit(signal, price, df)
                 
                 # Add to history
                 signal_entry = {
@@ -448,9 +462,54 @@ with st.sidebar:
                            ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
                            index=4)
     
-    st.subheader("Turtle Parameters")
-    entry = st.slider("Entry Period", 5, 50, 20, 1)
-    exit_p = st.slider("Exit Period", 5, 50, 10, 1)
+    st.subheader("📈 Trading Strategy")
+    selected_strategy = st.selectbox(
+        "Select Strategy",
+        options=list(STRATEGIES.keys()),
+        format_func=lambda x: STRATEGIES[x],
+        index=0
+    )
+    
+    # Store in session state
+    st.session_state.selected_strategy = selected_strategy
+    
+    # Show strategy description
+    strategy_desc = {
+        "donchian": "Breakout strategy using Donchian Channels (Turtle Trading)",
+        "rsi_macd": "Momentum + Trend convergence using RSI and MACD",
+        "supertrend": "Volatility-based trend following indicator",
+        "zigzag": "Price reversal pattern detection",
+        "bollinger": "Mean reversion strategy using Bollinger Bands",
+        "ema_cross": "Moving average crossover trend strategy"
+    }
+    st.caption(strategy_desc.get(selected_strategy, ""))
+    
+    # Dynamic parameters based on strategy
+    st.subheader("Strategy Parameters")
+    params = get_strategy_params(selected_strategy)
+    strategy_params = {}
+    
+    if selected_strategy == "donchian":
+        strategy_params["entry_period"] = st.slider("Entry Period", 5, 100, 20, 1)
+        strategy_params["exit_period"] = st.slider("Exit Period", 5, 100, 10, 1)
+    elif selected_strategy == "rsi_macd":
+        strategy_params["rsi_period"] = st.slider("RSI Period", 5, 30, 14, 1)
+        strategy_params["macd_fast"] = st.slider("MACD Fast", 5, 20, 12, 1)
+        strategy_params["macd_slow"] = st.slider("MACD Slow", 20, 50, 26, 1)
+        strategy_params["macd_signal"] = st.slider("MACD Signal", 5, 15, 9, 1)
+        strategy_params["rsi_oversold"] = st.slider("RSI Oversold", 10, 40, 30, 1)
+        strategy_params["rsi_overbought"] = st.slider("RSI Overbought", 60, 90, 70, 1)
+    elif selected_strategy == "supertrend":
+        strategy_params["period"] = st.slider("ATR Period", 5, 20, 10, 1)
+        strategy_params["multiplier"] = st.slider("Multiplier", 1.0, 5.0, 3.0, 0.1)
+    elif selected_strategy == "zigzag":
+        strategy_params["threshold"] = st.slider("Reversal Threshold (%)", 1, 20, 5, 1) / 100.0
+    elif selected_strategy == "bollinger":
+        strategy_params["period"] = st.slider("Period", 10, 50, 20, 1)
+        strategy_params["std_dev"] = st.slider("Std Dev", 1.0, 3.0, 2.0, 0.1)
+    elif selected_strategy == "ema_cross":
+        strategy_params["fast_period"] = st.slider("Fast EMA", 3, 20, 9, 1)
+        strategy_params["slow_period"] = st.slider("Slow EMA", 10, 100, 21, 1)
     
     st.subheader("Scanner")
     scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
@@ -536,7 +595,7 @@ with chart_col:
         while st.session_state.running:
             status_text.text("Scanning...")
             df, asset_label = scan_for_signals(
-                mode, symbol, interval, entry, exit_p,
+                mode, symbol, interval, selected_strategy, strategy_params,
                 tg_token, tg_chat, tv_username, tv_password
             )
             
@@ -563,7 +622,7 @@ with chart_col:
         # Manual scan button when stopped
         if st.button("🔍 Scan Now"):
             df, asset_label = scan_for_signals(
-                mode, symbol, interval, entry, exit_p,
+                mode, symbol, interval, selected_strategy, strategy_params,
                 tg_token, tg_chat, tv_username, tv_password
             )
         
