@@ -133,8 +133,21 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
     
     Stop Loss: Based on opposite channel boundary or ATR
     Take Profit: Based on risk-reward ratio (2:1 or 3:1) or channel targets
+    
+    Note: Only ENTER_LONG and ENTER_SHORT signals get TP/SL suggestions.
+    Exit signals return None for all levels.
     """
     latest = df.iloc[-1]
+    
+    # Exit signals don't need stop loss or take profit
+    if signal in ["EXIT_LONG", "EXIT_SHORT"]:
+        return {
+            "stop_loss": None,
+            "take_profit_1": None,
+            "take_profit_2": None,
+            "risk_reward_1": None,
+            "risk_reward_2": None
+        }
     
     # Get channel levels
     entry_upper = latest.get("entry_upper", price)
@@ -157,7 +170,7 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         "risk_reward_2": None
     }
     
-    if signal in ["ENTER_LONG", "EXIT_SHORT"]:
+    if signal == "ENTER_LONG":
         # Long position
         # Stop loss below entry_lower or using ATR
         sl_distance = max(price - entry_lower, atr * 1.5)
@@ -173,7 +186,7 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         if channel_target > result["take_profit_1"]:
             result["take_profit_2"] = round(channel_target, 2)
             
-    elif signal in ["ENTER_SHORT", "EXIT_LONG"]:
+    elif signal == "ENTER_SHORT":
         # Short position
         # Stop loss above entry_upper or using ATR
         sl_distance = max(entry_upper - price, atr * 1.5)
@@ -201,7 +214,8 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
 
 
 def format_signal_message(signal: str, asset: str, price: float, interval: str,
-                          confidence: float, stop_loss: float, take_profit: float) -> str:
+                          confidence: float, stop_loss: float, take_profit: float,
+                          strategy_name: str = "") -> str:
     """Format a rich Markdown alert message with full details."""
     emoji_map = {
         "ENTER_LONG":  "🟢",
@@ -211,15 +225,25 @@ def format_signal_message(signal: str, asset: str, price: float, interval: str,
     }
     emoji = emoji_map.get(signal, "⚪")
     
-    return (
-        f"{emoji} *{signal.replace('_', ' ')}*\n"
-        f"Asset: `{asset}` · TF: `{interval}`\n"
-        f"Price: `{price:,.2f}`\n"
-        f"Confidence: `{confidence:.1f}%`\n"
-        f"Stop Loss: `{stop_loss:,.2f}`\n"
-        f"Take Profit: `{take_profit:,.2f}`"
-    )
-
+    # Build message parts
+    message_parts = [
+        f"{emoji} *{signal.replace('_', ' ')}*",
+        f"Strategy: `{strategy_name}`" if strategy_name else None,
+        f"Asset: `{asset}` · TF: `{interval}`",
+        f"Price: `{price:,.2f}`",
+        f"Confidence: `{confidence:.1f}%`",
+    ]
+    
+    # Only include Stop Loss and Take Profit for entry signals
+    if signal in ["ENTER_LONG", "ENTER_SHORT"]:
+        if stop_loss:
+            message_parts.append(f"Stop Loss: `{stop_loss:,.2f}`")
+        if take_profit:
+            message_parts.append(f"Take Profit: `{take_profit:,.2f}`")
+    
+    # Filter out None values and join
+    message = "\n".join([p for p in message_parts if p is not None])
+    return message
 
 def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
                      strategy_params: dict, tg_token: str, tg_chat: str, tv_username: str, tv_password: str):
@@ -277,6 +301,7 @@ def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
                 signal_entry = {
                     "timestamp": current_ts_str,
                     "signal": signal,
+                    "strategy": STRATEGIES.get(strategy, strategy),
                     "asset": asset_label,
                     "interval": interval,
                     "price": price,
@@ -299,7 +324,7 @@ def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
                         notifier = TelegramNotifier(tg_token, tg_chat)
                         tp = sl_tp["take_profit_1"] if sl_tp["take_profit_1"] else price
                         msg = format_signal_message(signal, asset_label, price, interval,
-                                                   confidence, sl_tp["stop_loss"], tp)
+                                                   confidence, sl_tp["stop_loss"], tp, STRATEGIES.get(strategy, strategy))
                         notifier.send(msg)
                         log.info("Signal sent to Telegram: %s", signal)
                     except Exception as e:
@@ -653,7 +678,9 @@ with signals_col:
             emoji = {"ENTER_LONG": "🟢", "ENTER_SHORT": "🔴", "EXIT_LONG": "🟡", "EXIT_SHORT": "🟡"}.get(signal_type, "⚪")
             
             with st.container():
-                st.markdown(f"**{emoji} {signal_type.replace('_', ' ')}**")
+                st.markdown(f"**{emoji} {signal_type.replace("_", " ")}**")
+                if sig.get("strategy"):
+                    st.caption(f"Strategy: {sig["strategy"]}")
                 st.markdown(f"`{sig['asset']}` · `{sig['interval']}`")
                 st.markdown(f"**Entry:** ${sig['price']:,.2f}")
                 
@@ -703,12 +730,12 @@ if st.session_state.signal_history:
     
     # Format for display
     display_df = history_df[[
-        "timestamp", "signal", "asset", "interval", "price", 
+        "timestamp", "signal", "strategy", "asset", "interval", "price", 
         "confidence", "stop_loss", "take_profit_1", "take_profit_2"
     ]].copy()
     
     display_df.columns = [
-        "Time", "Signal", "Asset", "TF", "Entry Price",
+        "Time", "Signal", "Strategy", "Asset", "TF", "Entry Price",
         "Confidence %", "Stop Loss", "TP 1", "TP 2"
     ]
     
