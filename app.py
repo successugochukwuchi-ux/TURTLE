@@ -1,6 +1,6 @@
 """
 Turtle Trader — Streamlit App for Community Cloud
-Real-time multi-strategy trading scanner with confidence levels, stop loss & take profit suggestions.
+Real-time Turtle Trading scanner with confidence levels, stop loss & take profit suggestions.
 """
 
 import streamlit as st
@@ -13,12 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from core.data_fetcher import fetch_gold, fetch_crypto
-from core.strategies import (
-    compute_strategy_signals, 
-    get_latest_signal, 
-    STRATEGIES, 
-    get_strategy_params
-)
+from core.turtle_logic import compute_turtle_signals, get_latest_signal
 from utils.notifier import TelegramNotifier
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -52,10 +47,6 @@ if "last_sig_key" not in st.session_state:
     st.session_state.last_sig_key = None
 if "error" not in st.session_state:
     st.session_state.error = None
-if "selected_strategy" not in st.session_state:
-    st.session_state.selected_strategy = "donchian"
-if "strategy_params" not in st.session_state:
-    st.session_state.strategy_params = {}
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -133,21 +124,8 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
     
     Stop Loss: Based on opposite channel boundary or ATR
     Take Profit: Based on risk-reward ratio (2:1 or 3:1) or channel targets
-    
-    Note: Only ENTER_LONG and ENTER_SHORT signals get TP/SL suggestions.
-    Exit signals return None for all levels.
     """
     latest = df.iloc[-1]
-    
-    # Exit signals don't need stop loss or take profit
-    if signal in ["EXIT_LONG", "EXIT_SHORT"]:
-        return {
-            "stop_loss": None,
-            "take_profit_1": None,
-            "take_profit_2": None,
-            "risk_reward_1": None,
-            "risk_reward_2": None
-        }
     
     # Get channel levels
     entry_upper = latest.get("entry_upper", price)
@@ -170,7 +148,7 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         "risk_reward_2": None
     }
     
-    if signal == "ENTER_LONG":
+    if signal in ["ENTER_LONG", "EXIT_SHORT"]:
         # Long position
         # Stop loss below entry_lower or using ATR
         sl_distance = max(price - entry_lower, atr * 1.5)
@@ -186,7 +164,7 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         if channel_target > result["take_profit_1"]:
             result["take_profit_2"] = round(channel_target, 2)
             
-    elif signal == "ENTER_SHORT":
+    elif signal in ["ENTER_SHORT", "EXIT_LONG"]:
         # Short position
         # Stop loss above entry_upper or using ATR
         sl_distance = max(entry_upper - price, atr * 1.5)
@@ -214,8 +192,7 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
 
 
 def format_signal_message(signal: str, asset: str, price: float, interval: str,
-                          confidence: float, stop_loss: float, take_profit: float,
-                          strategy_name: str = "") -> str:
+                          confidence: float, stop_loss: float, take_profit: float) -> str:
     """Format a rich Markdown alert message with full details."""
     emoji_map = {
         "ENTER_LONG":  "🟢",
@@ -225,28 +202,18 @@ def format_signal_message(signal: str, asset: str, price: float, interval: str,
     }
     emoji = emoji_map.get(signal, "⚪")
     
-    # Build message parts
-    message_parts = [
-        f"{emoji} *{signal.replace('_', ' ')}*",
-        f"Strategy: `{strategy_name}`" if strategy_name else None,
-        f"Asset: `{asset}` · TF: `{interval}`",
-        f"Price: `{price:,.2f}`",
-        f"Confidence: `{confidence:.1f}%`",
-    ]
-    
-    # Only include Stop Loss and Take Profit for entry signals
-    if signal in ["ENTER_LONG", "ENTER_SHORT"]:
-        if stop_loss:
-            message_parts.append(f"Stop Loss: `{stop_loss:,.2f}`")
-        if take_profit:
-            message_parts.append(f"Take Profit: `{take_profit:,.2f}`")
-    
-    # Filter out None values and join
-    message = "\n".join([p for p in message_parts if p is not None])
-    return message
+    return (
+        f"{emoji} *{signal.replace('_', ' ')}*\n"
+        f"Asset: `{asset}` · TF: `{interval}`\n"
+        f"Price: `{price:,.2f}`\n"
+        f"Confidence: `{confidence:.1f}%`\n"
+        f"Stop Loss: `{stop_loss:,.2f}`\n"
+        f"Take Profit: `{take_profit:,.2f}`"
+    )
 
-def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
-                     strategy_params: dict, tg_token: str, tg_chat: str, tv_username: str, tv_password: str):
+
+def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: int,
+                     tg_token: str, tg_chat: str, tv_username: str, tv_password: str):
     """Run a single scan iteration and update session state."""
     try:
         # Inject TV credentials
@@ -254,12 +221,7 @@ def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
         _df_mod.TV_USERNAME = tv_username
         _df_mod.TV_PASSWORD = tv_password
         
-        # Calculate lookback based on strategy params
-        numeric_params = [v for v in strategy_params.values() if isinstance(v, (int, float))]
-        max_period = max(numeric_params) if numeric_params else 50
-        if max_period < 1:  # Handle threshold-like params (e.g., 0.05)
-            max_period = int(50 / max_period) if max_period > 0 else 50
-        lookback = int(max_period * 25)
+        lookback = max(entry, exit_p) * 15
         if mode == "gold":
             df = fetch_gold(interval=interval, lookback_bars=lookback)
             asset_label = "XAUUSD"
@@ -267,7 +229,7 @@ def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
             df = fetch_crypto(symbol, interval=interval, lookback_bars=lookback)
             asset_label = symbol
         
-        df = compute_strategy_signals(df, strategy=strategy, **strategy_params)
+        df = compute_turtle_signals(df, entry_period=entry, exit_period=exit_p)
         info = get_latest_signal(df)
         
         price = info["close"]
@@ -294,14 +256,13 @@ def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
             
             if current_ts_str not in existing_timestamps:
                 # Calculate confidence and levels
-                confidence = calculate_confidence(df)
-                sl_tp = calculate_stop_loss_take_profit(signal, price, df)
+                confidence = calculate_confidence(df, entry, exit_p)
+                sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
                 
                 # Add to history
                 signal_entry = {
                     "timestamp": current_ts_str,
                     "signal": signal,
-                    "strategy": STRATEGIES.get(strategy, strategy),
                     "asset": asset_label,
                     "interval": interval,
                     "price": price,
@@ -324,7 +285,7 @@ def scan_for_signals(mode: str, symbol: str, interval: str, strategy: str,
                         notifier = TelegramNotifier(tg_token, tg_chat)
                         tp = sl_tp["take_profit_1"] if sl_tp["take_profit_1"] else price
                         msg = format_signal_message(signal, asset_label, price, interval,
-                                                   confidence, sl_tp["stop_loss"], tp, STRATEGIES.get(strategy, strategy))
+                                                   confidence, sl_tp["stop_loss"], tp)
                         notifier.send(msg)
                         log.info("Signal sent to Telegram: %s", signal)
                     except Exception as e:
@@ -487,54 +448,9 @@ with st.sidebar:
                            ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
                            index=4)
     
-    st.subheader("📈 Trading Strategy")
-    selected_strategy = st.selectbox(
-        "Select Strategy",
-        options=list(STRATEGIES.keys()),
-        format_func=lambda x: STRATEGIES[x],
-        index=0
-    )
-    
-    # Store in session state
-    st.session_state.selected_strategy = selected_strategy
-    
-    # Show strategy description
-    strategy_desc = {
-        "donchian": "Breakout strategy using Donchian Channels (Turtle Trading)",
-        "rsi_macd": "Momentum + Trend convergence using RSI and MACD",
-        "supertrend": "Volatility-based trend following indicator",
-        "zigzag": "Price reversal pattern detection",
-        "bollinger": "Mean reversion strategy using Bollinger Bands",
-        "ema_cross": "Moving average crossover trend strategy"
-    }
-    st.caption(strategy_desc.get(selected_strategy, ""))
-    
-    # Dynamic parameters based on strategy
-    st.subheader("Strategy Parameters")
-    params = get_strategy_params(selected_strategy)
-    strategy_params = {}
-    
-    if selected_strategy == "donchian":
-        strategy_params["entry_period"] = st.slider("Entry Period", 5, 100, 20, 1)
-        strategy_params["exit_period"] = st.slider("Exit Period", 5, 100, 10, 1)
-    elif selected_strategy == "rsi_macd":
-        strategy_params["rsi_period"] = st.slider("RSI Period", 5, 30, 14, 1)
-        strategy_params["macd_fast"] = st.slider("MACD Fast", 5, 20, 12, 1)
-        strategy_params["macd_slow"] = st.slider("MACD Slow", 20, 50, 26, 1)
-        strategy_params["macd_signal"] = st.slider("MACD Signal", 5, 15, 9, 1)
-        strategy_params["rsi_oversold"] = st.slider("RSI Oversold", 10, 40, 30, 1)
-        strategy_params["rsi_overbought"] = st.slider("RSI Overbought", 60, 90, 70, 1)
-    elif selected_strategy == "supertrend":
-        strategy_params["period"] = st.slider("ATR Period", 5, 20, 10, 1)
-        strategy_params["multiplier"] = st.slider("Multiplier", 1.0, 5.0, 3.0, 0.1)
-    elif selected_strategy == "zigzag":
-        strategy_params["threshold"] = st.slider("Reversal Threshold (%)", 1, 20, 5, 1) / 100.0
-    elif selected_strategy == "bollinger":
-        strategy_params["period"] = st.slider("Period", 10, 50, 20, 1)
-        strategy_params["std_dev"] = st.slider("Std Dev", 1.0, 3.0, 2.0, 0.1)
-    elif selected_strategy == "ema_cross":
-        strategy_params["fast_period"] = st.slider("Fast EMA", 3, 20, 9, 1)
-        strategy_params["slow_period"] = st.slider("Slow EMA", 10, 100, 21, 1)
+    st.subheader("Turtle Parameters")
+    entry = st.slider("Entry Period", 5, 50, 20, 1)
+    exit_p = st.slider("Exit Period", 5, 50, 10, 1)
     
     st.subheader("Scanner")
     scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
@@ -620,7 +536,7 @@ with chart_col:
         while st.session_state.running:
             status_text.text("Scanning...")
             df, asset_label = scan_for_signals(
-                mode, symbol, interval, selected_strategy, strategy_params,
+                mode, symbol, interval, entry, exit_p,
                 tg_token, tg_chat, tv_username, tv_password
             )
             
@@ -647,7 +563,7 @@ with chart_col:
         # Manual scan button when stopped
         if st.button("🔍 Scan Now"):
             df, asset_label = scan_for_signals(
-                mode, symbol, interval, selected_strategy, strategy_params,
+                mode, symbol, interval, entry, exit_p,
                 tg_token, tg_chat, tv_username, tv_password
             )
         
@@ -678,9 +594,7 @@ with signals_col:
             emoji = {"ENTER_LONG": "🟢", "ENTER_SHORT": "🔴", "EXIT_LONG": "🟡", "EXIT_SHORT": "🟡"}.get(signal_type, "⚪")
             
             with st.container():
-                st.markdown(f"**{emoji} {signal_type.replace("_", " ")}**")
-                if sig.get("strategy"):
-                    st.caption(f"Strategy: {sig["strategy"]}")
+                st.markdown(f"**{emoji} {signal_type.replace('_', ' ')}**")
                 st.markdown(f"`{sig['asset']}` · `{sig['interval']}`")
                 st.markdown(f"**Entry:** ${sig['price']:,.2f}")
                 
@@ -730,12 +644,12 @@ if st.session_state.signal_history:
     
     # Format for display
     display_df = history_df[[
-        "timestamp", "signal", "strategy", "asset", "interval", "price", 
+        "timestamp", "signal", "asset", "interval", "price", 
         "confidence", "stop_loss", "take_profit_1", "take_profit_2"
     ]].copy()
     
     display_df.columns = [
-        "Time", "Signal", "Strategy", "Asset", "TF", "Entry Price",
+        "Time", "Signal", "Asset", "TF", "Entry Price",
         "Confidence %", "Stop Loss", "TP 1", "TP 2"
     ]
     
