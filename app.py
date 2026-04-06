@@ -235,12 +235,21 @@ def check_trade_exit(active_trade: dict, current_price: float) -> str:
 
 
 def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame, 
-                                     entry_period: int = 20, exit_period: int = 10) -> dict:
+                                     entry_period: int = 20, exit_period: int = 10,
+                                     risk_reward_ratio: float = 2.0) -> dict:
     """
     Calculate suggested stop loss and take profit levels.
     
     Stop Loss: Based on opposite channel boundary or ATR
-    Take Profit: Based on risk-reward ratio (2:1 or 3:1) or channel targets
+    Take Profit: Based on user-defined risk-reward ratio or channel targets
+    
+    Args:
+        signal: Signal type (ENTER_LONG, ENTER_SHORT, etc.)
+        price: Current entry price
+        df: Price dataframe
+        entry_period: Turtle entry period
+        exit_period: Turtle exit period
+        risk_reward_ratio: User-defined R:R ratio (default 2.0)
     """
     latest = df.iloc[-1]
     
@@ -271,10 +280,10 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         sl_distance = max(price - entry_lower, atr * 1.5)
         result["stop_loss"] = round(price - sl_distance, 2)
         
-        # Take profit targets
+        # Take profit targets based on user-defined R:R ratio
         risk = price - result["stop_loss"]
-        result["take_profit_1"] = round(price + risk * 2, 2)  # 2:1 R:R
-        result["take_profit_2"] = round(price + risk * 3, 2)  # 3:1 R:R
+        result["take_profit_1"] = round(price + risk * risk_reward_ratio, 2)
+        result["take_profit_2"] = round(price + risk * (risk_reward_ratio + 1), 2)
         
         # Channel target
         channel_target = entry_upper + (entry_upper - entry_lower) * 0.5
@@ -287,10 +296,10 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         sl_distance = max(entry_upper - price, atr * 1.5)
         result["stop_loss"] = round(price + sl_distance, 2)
         
-        # Take profit targets
+        # Take profit targets based on user-defined R:R ratio
         risk = result["stop_loss"] - price
-        result["take_profit_1"] = round(price - risk * 2, 2)  # 2:1 R:R
-        result["take_profit_2"] = round(price - risk * 3, 2)  # 3:1 R:R
+        result["take_profit_1"] = round(price - risk * risk_reward_ratio, 2)
+        result["take_profit_2"] = round(price - risk * (risk_reward_ratio + 1), 2)
         
         # Channel target
         channel_target = entry_lower - (entry_upper - entry_lower) * 0.5
@@ -302,8 +311,8 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         risk_pct = abs(price - result["stop_loss"]) / price * 100
         reward1_pct = abs(result["take_profit_1"] - price) / price * 100
         reward2_pct = abs(result["take_profit_2"] - price) / price * 100 if result["take_profit_2"] else None
-        result["risk_reward_1"] = f"{reward1_pct/risk_pct:.1f}:1" if risk_pct > 0 else "N/A"
-        result["risk_reward_2"] = f"{reward2_pct/risk_pct:.1f}:1" if result["take_profit_2"] and risk_pct > 0 else "N/A"
+        result["risk_reward_1"] = f"1:{risk_reward_ratio}"
+        result["risk_reward_2"] = f"1:{risk_reward_ratio + 1}" if result["take_profit_2"] else "N/A"
     
     return result
 
@@ -331,7 +340,7 @@ def format_signal_message(signal: str, asset: str, price: float, interval: str,
 
 def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: int,
                      tg_token: str, tg_chat: str, tv_username: str, tv_password: str,
-                     strategy_choice: str = "Turtle Trading"):
+                     strategy_choice: str = "Turtle Trading", risk_reward_ratio: float = 2.0):
     """Run a single scan iteration and update session state.
     
     Supports both Turtle Trading and Forex Scalping strategies.
@@ -339,6 +348,19 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
     - No new entry if active trade exists
     - Monitor for TP/SL hits
     - Print GUARD/HOLD/WATCH status updates
+    
+    Args:
+        mode: Asset type (gold/crypto)
+        symbol: Crypto symbol
+        interval: Timeframe
+        entry: Entry period
+        exit_p: Exit period
+        tg_token: Telegram bot token
+        tg_chat: Telegram chat ID
+        tv_username: TradingView username
+        tv_password: TradingView password
+        strategy_choice: Selected strategy
+        risk_reward_ratio: User-defined R:R ratio for SL/TP calculation
     """
     try:
         # Inject TV credentials
@@ -472,12 +494,17 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
                     # Calculate confidence and levels based on strategy
                     if strategy_choice == "Turtle Trading":
                         confidence = calculate_confidence(df, entry, exit_p)
-                        sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
+                        sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p, risk_reward_ratio)
                     else:
                         confidence = 75.0
                         sl_tp = ScalpingStrategies.calculate_stop_loss_take_profit(
                             signal, price, df, strategy_choice
                         )
+                        # Override with user's R:R ratio for scalping strategies too
+                        if sl_tp.get("stop_loss") and sl_tp.get("take_profit"):
+                            sl_distance = abs(price - sl_tp["stop_loss"])
+                            sl_tp["take_profit_1"] = round(price + sl_distance * risk_reward_ratio, 5) if signal in ["ENTER_LONG", "EXIT_SHORT"] else round(price - sl_distance * risk_reward_ratio, 5)
+                            sl_tp["risk_reward"] = f"1:{risk_reward_ratio}"
                     
                     # Get TP and SL values
                     stop_loss = sl_tp.get("stop_loss")
@@ -819,6 +846,56 @@ with st.sidebar:
         entry = 20
         exit_p = 10
     
+    # Risk/Reward Ratio Input - Available for all strategies
+    st.subheader("Risk Management")
+    
+    # Define optimal R:R ratios per strategy/timeframe combination
+    optimal_rr_ratios = {
+        ("Turtle Trading", "1m"): 2.0,
+        ("Turtle Trading", "5m"): 2.0,
+        ("Turtle Trading", "15m"): 2.0,
+        ("Turtle Trading", "30m"): 2.5,
+        ("Turtle Trading", "1h"): 2.5,
+        ("Turtle Trading", "4h"): 3.0,
+        ("Turtle Trading", "1d"): 3.0,
+        ("1-Minute Scalping", "1m"): 1.5,
+        ("1-Minute Scalping", "5m"): 1.5,
+        ("1-Minute Scalping", "15m"): 2.0,
+        ("1-Minute Scalping", "30m"): 2.0,
+        ("1-Minute Scalping", "1h"): 2.5,
+        ("1-Minute Scalping", "4h"): 2.5,
+        ("1-Minute Scalping", "1d"): 3.0,
+        ("MA Ribbon Entry", "1m"): 1.5,
+        ("MA Ribbon Entry", "5m"): 1.5,
+        ("MA Ribbon Entry", "15m"): 2.0,
+        ("MA Ribbon Entry", "30m"): 2.0,
+        ("MA Ribbon Entry", "1h"): 2.5,
+        ("MA Ribbon Entry", "4h"): 2.5,
+        ("MA Ribbon Entry", "1d"): 3.0,
+        ("Bollinger Band Scalping", "1m"): 1.5,
+        ("Bollinger Band Scalping", "5m"): 1.5,
+        ("Bollinger Band Scalping", "15m"): 2.0,
+        ("Bollinger Band Scalping", "30m"): 2.0,
+        ("Bollinger Band Scalping", "1h"): 2.5,
+        ("Bollinger Band Scalping", "4h"): 2.5,
+        ("Bollinger Band Scalping", "1d"): 3.0,
+    }
+    
+    # Get optimal R:R for current strategy/timeframe
+    optimal_key = (strategy_choice, interval)
+    default_rr = optimal_rr_ratios.get(optimal_key, 2.0)
+    
+    st.caption(f"💡 Optimal R:R for {strategy_choice} on {interval}: **1:{default_rr}**")
+    
+    risk_reward_ratio = st.number_input(
+        "Risk/Reward Ratio",
+        min_value=0.5,
+        max_value=5.0,
+        value=default_rr,
+        step=0.1,
+        help="Set your desired risk/reward ratio. TP will be calculated as SL distance × this ratio."
+    )
+    
     st.subheader("Scanner")
     scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
     
@@ -836,13 +913,41 @@ with st.sidebar:
     
     st.divider()
     
-    # Test Telegram Button
-    if st.button("📬 Test Telegram", type="secondary", use_container_width=True):
+    # Test Telegram Button - sends a test signal with all user settings
+    if st.button("📬 Test Signal", type="secondary", use_container_width=True):
         try:
             notifier = TelegramNotifier(tg_token, tg_chat)
-            test_result = notifier.test()
-            if test_result:
-                st.success("✅ Test message sent successfully!")
+            
+            # Generate a fake test signal with all user settings
+            test_price = 2350.00 if mode == "gold" else 95000.00
+            test_signal = "ENTER_LONG"
+            test_confidence = 78.5
+            test_sl = test_price * 0.99 if test_signal == "ENTER_LONG" else test_price * 1.01
+            test_tp = test_price * 1.02 if test_signal == "ENTER_LONG" else test_price * 0.98
+            
+            # Format the test message with all user settings
+            test_msg = (
+                f"🧪 *TEST SIGNAL* 🧪\\n\\n"
+                f"{strategy_choice}\\n\\n"
+                f"🟢 *ENTER LONG*\\n"
+                f"Asset: `{symbol if mode == 'crypto' else 'XAUUSD'}` · TF: `{interval}`\\n"
+                f"Price: `{test_price:,.5f}`\\n"
+                f"Confidence: `{test_confidence:.1f}%`\\n"
+                f"Stop Loss: `{test_sl:,.5f}`\\n"
+                f"Take Profit: `{test_tp:,.5f}`\\n"
+                f"Risk/Reward: `1:{risk_reward_ratio}`\\n\\n"
+                f"_Settings:_\\n"
+                f"• Strategy: {strategy_choice}\\n"
+                f"• Timeframe: {interval}\\n"
+                f"• R:R Ratio: 1:{risk_reward_ratio}\\n"
+                f"• Entry Period: {entry}\\n"
+                f"• Exit Period: {exit_p}\\n\\n"
+                f"✅ _This is a TEST message to verify your signaling system works!_"
+            )
+            
+            result = notifier.send(test_msg)
+            if result:
+                st.success("✅ Test signal sent successfully! Check your Telegram.")
             else:
                 st.error("❌ Telegram API returned an error")
         except Exception as e:
@@ -992,7 +1097,7 @@ with chart_col:
             df, asset_label = scan_for_signals(
                 mode, symbol, interval, entry, exit_p,
                 tg_token, tg_chat, tv_username, tv_password,
-                strategy_choice
+                strategy_choice, risk_reward_ratio
             )
             
             if df is not None:
@@ -1020,7 +1125,7 @@ with chart_col:
             df, asset_label = scan_for_signals(
                 mode, symbol, interval, entry, exit_p,
                 tg_token, tg_chat, tv_username, tv_password,
-                strategy_choice
+                strategy_choice, risk_reward_ratio
             )
         
         if df is not None:
