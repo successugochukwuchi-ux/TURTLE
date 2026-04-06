@@ -357,20 +357,21 @@ def format_scalping_signal_message(strategy: str, signal: str, asset: str, price
     
     return (
         f"{emoji} {strategy_icon} *{strategy}*\n\n"
-        f"{emoji} *{signal.replace('_', ' ')}*\\n"
-        f"Asset: `{asset}` · TF: `{interval}`\\n"
-        f"Price: `{price:,.5f}`\\n"
-        f"Confidence: `{confidence:.1f}%`\\n"
-        f"Stop Loss: `{stop_loss:,.5f}`\\n"
-        f"Take Profit: `{take_profit:,.5f}`\\n"
+        f"{emoji} *{signal.replace('_', ' ')}*\n"
+        f"Asset: `{asset}` · TF: `{interval}`\n"
+        f"Price: `{price:,.5f}`\n"
+        f"Confidence: `{confidence:.1f}%`\n"
+        f"Stop Loss: `{stop_loss:,.5f}`\n"
+        f"Take Profit: `{take_profit:,.5f}`\n"
         f"Risk/Reward: `1:1.5`"
     )
 
 
-def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure:
-    """Create an interactive candlestick chart with Turtle channels and signals.
+def create_chart(df: pd.DataFrame, asset_label: str, signals: list, strategy_name: str = "Turtle Trading") -> go.Figure:
+    """Create an interactive candlestick chart with channels and signals.
     
     Uses Plotly's efficient update methods for smooth real-time updates without recreating the entire chart.
+    Adapts visualization based on the selected strategy.
     """
     if df is None or df.empty:
         fig = go.Figure()
@@ -381,7 +382,7 @@ def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure
     # Create subplots
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                        vertical_spacing=0.03, row_heights=[0.7, 0.3],
-                       subplot_titles=(f"{asset_label} Price with Turtle Channels", "Volume"))
+                       subplot_titles=(f"{asset_label} Price Chart", "Volume"))
     
     # Candlestick
     fig.add_trace(go.Candlestick(
@@ -395,17 +396,46 @@ def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure
         decreasing_line_color="#ef5350"
     ), row=1, col=1)
     
-    # Entry channels - solid blue lines
-    fig.add_trace(go.Scatter(x=df.index, y=df["entry_upper"], 
-                            name="Entry Upper", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["entry_lower"], 
-                            name="Entry Lower", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
-    
-    # Exit channels - dashed orange lines
-    fig.add_trace(go.Scatter(x=df.index, y=df["exit_upper"], 
-                            name="Exit Upper", line=dict(color="#ff6d00", width=1, dash="dash")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["exit_lower"], 
-                            name="Exit Lower", line=dict(color="#ff6d00", width=1, dash="dash")), row=1, col=1)
+    # Add strategy-specific indicators
+    if strategy_name == "Turtle Trading":
+        # Entry channels - solid blue lines
+        if "entry_upper" in df.columns and "entry_lower" in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df["entry_upper"], 
+                                    name="Entry Upper", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["entry_lower"], 
+                                    name="Entry Lower", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
+            
+            # Exit channels - dashed orange lines
+            if "exit_upper" in df.columns and "exit_lower" in df.columns:
+                fig.add_trace(go.Scatter(x=df.index, y=df["exit_upper"], 
+                                        name="Exit Upper", line=dict(color="#ff6d00", width=1, dash="dash")), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df["exit_lower"], 
+                                        name="Exit Lower", line=dict(color="#ff6d00", width=1, dash="dash")), row=1, col=1)
+    elif strategy_name == "1-Minute Scalping":
+        # EMA lines
+        if "ema_13" in df.columns and "ema_26" in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df["ema_13"], 
+                                    name="EMA 13", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["ema_26"], 
+                                    name="EMA 26", line=dict(color="#ff6d00", width=1.5)), row=1, col=1)
+    elif strategy_name == "MA Ribbon Entry":
+        # SMA ribbon
+        if "sma_5" in df.columns and "sma_8" in df.columns and "sma_13" in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df["sma_5"], 
+                                    name="SMA 5", line=dict(color="#2962ff", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["sma_8"], 
+                                    name="SMA 8", line=dict(color="#ff6d00", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["sma_13"], 
+                                    name="SMA 13", line=dict(color="#00c853", width=1.5)), row=1, col=1)
+    elif strategy_name == "Bollinger Band Scalping":
+        # Bollinger Bands
+        if "bb_upper" in df.columns and "bb_lower" in df.columns and "bb_middle" in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df["bb_upper"], 
+                                    name="BB Upper", line=dict(color="#ff5252", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["bb_middle"], 
+                                    name="BB Middle", line=dict(color="#bdbdbd", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["bb_lower"], 
+                                    name="BB Lower", line=dict(color="#448aff", width=1.5)), row=1, col=1)
     
     # Signal markers - plot all historical signals on chart
     if signals:
@@ -666,7 +696,7 @@ with chart_col:
                             "price": sig["price"]
                         })
                 
-                fig = create_chart(df, asset_label, signals_list)
+                fig = create_chart(df, asset_label, signals_list, strategy_choice)
                 chart_placeholder.empty()  # Clear previous chart
                 chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"live_chart_{asset_label}_{int(time.time())}")
             
@@ -694,7 +724,7 @@ with chart_col:
                         "price": sig["price"]
                     })
             
-            fig = create_chart(df, asset_label, signals_list)
+            fig = create_chart(df, asset_label, signals_list, strategy_choice)
             chart_placeholder.empty()  # Clear previous chart
             chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"manual_chart_{asset_label}_{int(time.time())}")
         else:
