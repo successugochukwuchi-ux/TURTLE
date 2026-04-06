@@ -54,6 +54,16 @@ if "daily_trades" not in st.session_state:
     st.session_state.daily_trades = 0
 if "session_date" not in st.session_state:
     st.session_state.session_date = datetime.now().date()
+# NEW: Active trade tracking
+if "active_trade" not in st.session_state:
+    st.session_state.active_trade = None  # Dict with entry info when trade is open
+if "trade_status" not in st.session_state:
+    st.session_state.trade_status = "NO_TRADE"  # NO_TRADE, IN_TRADE, GUARD, HOLD, WATCH
+if "last_market_update" not in st.session_state:
+    st.session_state.last_market_update = None
+# NEW: User-configurable risk/reward ratio
+if "user_rr_ratio" not in st.session_state:
+    st.session_state.user_rr_ratio = 1.5  # Default 1:1.5
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -124,13 +134,125 @@ def calculate_confidence(df, entry_period: int = 20, exit_period: int = 10) -> f
     return round(min(100, max(0, total_confidence)), 1)
 
 
+def assess_market_status(active_trade: dict, current_price: float, df: pd.DataFrame) -> tuple:
+    """
+    Assess the current market status relative to an active trade.
+    
+    Returns:
+        tuple: (status, confidence) where status is one of:
+            - "GUARD": Market moving against entry (filter noise, stay vigilant)
+            - "HOLD": Market following prediction (hold position)
+            - "WATCH": Market shaky/unclear (crosshair candles, no clear movement)
+    """
+    if not active_trade:
+        return "NO_TRADE", 0
+    
+    entry_price = active_trade["entry_price"]
+    entry_type = active_trade["entry_type"]  # ENTER_LONG or ENTER_SHORT
+    stop_loss = active_trade["stop_loss"]
+    take_profit = active_trade["take_profit"]
+    
+    # Calculate distance from entry
+    if entry_type == "ENTER_LONG":
+        price_change_pct = (current_price - entry_price) / entry_price * 100
+        is_in_profit = current_price > entry_price
+        sl_distance_pct = (entry_price - stop_loss) / entry_price * 100 if stop_loss else 2
+        tp_distance_pct = (take_profit - entry_price) / entry_price * 100 if take_profit else 4
+    else:  # ENTER_SHORT
+        price_change_pct = (entry_price - current_price) / entry_price * 100
+        is_in_profit = current_price < entry_price
+        sl_distance_pct = (stop_loss - entry_price) / entry_price * 100 if stop_loss else 2
+        tp_distance_pct = (entry_price - take_profit) / entry_price * 100 if take_profit else 4
+    
+    # Check for crosshair/doji candles (indecision)
+    if len(df) >= 3:
+        recent_candles = df.iloc[-3:]
+        body_sizes = abs(recent_candles["close"] - recent_candles["open"])
+        candle_ranges = recent_candles["high"] - recent_candles["low"]
+        
+        # Crosshair detection: small bodies relative to range
+        avg_body_ratio = (body_sizes / candle_ranges.replace(0, 0.0001)).mean()
+        is_crosshair = avg_body_ratio < 0.3  # Bodies are less than 30% of candle range
+    else:
+        is_crosshair = False
+    
+    # Calculate confidence based on price action
+    if is_in_profit:
+        # In profit - check if trending well
+        if price_change_pct >= tp_distance_pct * 0.5:
+            confidence = min(95, 70 + (price_change_pct / tp_distance_pct) * 30)
+        else:
+            confidence = min(85, 60 + (price_change_pct / tp_distance_pct) * 30)
+        status = "HOLD"
+    else:
+        # Against us - check severity
+        loss_ratio = abs(price_change_pct) / sl_distance_pct if sl_distance_pct > 0 else 0
+        
+        if loss_ratio > 0.7:
+            # Close to stop loss - high alert
+            confidence = max(40, 80 - loss_ratio * 40)
+            status = "GUARD"
+        elif loss_ratio > 0.3:
+            # Moderate move against
+            confidence = max(50, 70 - loss_ratio * 30)
+            status = "GUARD"
+        else:
+            # Small pullback - could be noise
+            confidence = max(55, 65 - loss_ratio * 20)
+            status = "GUARD"
+    
+    # Override with WATCH if market is indecisive
+    if is_crosshair and not is_in_profit:
+        status = "WATCH"
+        confidence = 50
+    
+    return status, round(confidence, 1)
+
+
+def check_trade_exit(active_trade: dict, current_price: float) -> str:
+    """
+    Check if current price hits TP or SL.
+    
+    Returns:
+        str: "TP_HIT", "SL_HIT", or "NONE"
+    """
+    if not active_trade:
+        return "NONE"
+    
+    entry_type = active_trade["entry_type"]
+    stop_loss = active_trade["stop_loss"]
+    take_profit = active_trade["take_profit"]
+    
+    if entry_type == "ENTER_LONG":
+        if take_profit and current_price >= take_profit:
+            return "TP_HIT"
+        if stop_loss and current_price <= stop_loss:
+            return "SL_HIT"
+    else:  # ENTER_SHORT
+        if take_profit and current_price <= take_profit:
+            return "TP_HIT"
+        if stop_loss and current_price >= stop_loss:
+            return "SL_HIT"
+    
+    return "NONE"
+
+
 def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame, 
-                                     entry_period: int = 20, exit_period: int = 10) -> dict:
+                                     entry_period: int = 20, exit_period: int = 10,
+                                     rr_ratio: float = 1.5) -> dict:
     """
     Calculate suggested stop loss and take profit levels.
     
     Stop Loss: Based on opposite channel boundary or ATR
-    Take Profit: Based on risk-reward ratio (2:1 or 3:1) or channel targets
+    Take Profit: Based on risk-reward ratio (user-defined or default) or channel targets
+    
+    Args:
+        signal: Entry signal type
+        price: Current entry price
+        df: DataFrame with OHLC data
+        entry_period: Turtle entry period
+        exit_period: Turtle exit period
+        rr_ratio: Risk/reward ratio multiplier (e.g., 1.5 for 1:1.5, 2.0 for 1:2)
     """
     latest = df.iloc[-1]
     
@@ -161,10 +283,10 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         sl_distance = max(price - entry_lower, atr * 1.5)
         result["stop_loss"] = round(price - sl_distance, 2)
         
-        # Take profit targets
+        # Take profit targets based on user's RR ratio
         risk = price - result["stop_loss"]
-        result["take_profit_1"] = round(price + risk * 2, 2)  # 2:1 R:R
-        result["take_profit_2"] = round(price + risk * 3, 2)  # 3:1 R:R
+        result["take_profit_1"] = round(price + risk * rr_ratio, 2)  # User-defined R:R
+        result["take_profit_2"] = round(price + risk * (rr_ratio + 1), 2)  # Higher R:R
         
         # Channel target
         channel_target = entry_upper + (entry_upper - entry_lower) * 0.5
@@ -177,10 +299,10 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         sl_distance = max(entry_upper - price, atr * 1.5)
         result["stop_loss"] = round(price + sl_distance, 2)
         
-        # Take profit targets
+        # Take profit targets based on user's RR ratio
         risk = result["stop_loss"] - price
-        result["take_profit_1"] = round(price - risk * 2, 2)  # 2:1 R:R
-        result["take_profit_2"] = round(price - risk * 3, 2)  # 3:1 R:R
+        result["take_profit_1"] = round(price - risk * rr_ratio, 2)  # User-defined R:R
+        result["take_profit_2"] = round(price - risk * (rr_ratio + 1), 2)  # Higher R:R
         
         # Channel target
         channel_target = entry_lower - (entry_upper - entry_lower) * 0.5
@@ -192,14 +314,15 @@ def calculate_stop_loss_take_profit(signal: str, price: float, df: pd.DataFrame,
         risk_pct = abs(price - result["stop_loss"]) / price * 100
         reward1_pct = abs(result["take_profit_1"] - price) / price * 100
         reward2_pct = abs(result["take_profit_2"] - price) / price * 100 if result["take_profit_2"] else None
-        result["risk_reward_1"] = f"{reward1_pct/risk_pct:.1f}:1" if risk_pct > 0 else "N/A"
-        result["risk_reward_2"] = f"{reward2_pct/risk_pct:.1f}:1" if result["take_profit_2"] and risk_pct > 0 else "N/A"
+        result["risk_reward_1"] = f"1:{rr_ratio:.1f}"
+        result["risk_reward_2"] = f"1:{rr_ratio + 1:.1f}" if result["take_profit_2"] else "N/A"
     
     return result
 
 
 def format_signal_message(signal: str, asset: str, price: float, interval: str,
-                          confidence: float, stop_loss: float, take_profit: float) -> str:
+                          confidence: float, stop_loss: float, take_profit: float,
+                          rr_ratio: float = 1.5) -> str:
     """Format a rich Markdown alert message with full details."""
     emoji_map = {
         "ENTER_LONG":  "🟢",
@@ -215,7 +338,8 @@ def format_signal_message(signal: str, asset: str, price: float, interval: str,
         f"Price: `{price:,.2f}`\n"
         f"Confidence: `{confidence:.1f}%`\n"
         f"Stop Loss: `{stop_loss:,.2f}`\n"
-        f"Take Profit: `{take_profit:,.2f}`"
+        f"Take Profit: `{take_profit:,.2f}`\n"
+        f"Risk/Reward: `1:{rr_ratio:.1f}`"
     )
 
 
@@ -225,6 +349,10 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
     """Run a single scan iteration and update session state.
     
     Supports both Turtle Trading and Forex Scalping strategies.
+    Implements proper trade lifecycle management:
+    - No new entry if active trade exists
+    - Monitor for TP/SL hits
+    - Print GUARD/HOLD/WATCH status updates
     """
     try:
         # Inject TV credentials
@@ -255,77 +383,190 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
         
         # Update basic state
         st.session_state.last_price = price
-        st.session_state.last_signal = signal or "—"
         st.session_state.last_check = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         st.session_state.error = None
         
-        # Check for new signal - use timestamp only as key to avoid duplicate detection issues
-        sig_key = str(ts)
+        # ── TRADE MANAGEMENT LOGIC ─────────────────────────────────────────────
         
-        # Check if this is a genuine entry/exit signal (not just "HOLD" or None)
-        valid_signals = ["ENTER_LONG", "ENTER_SHORT", "EXIT_LONG", "EXIT_SHORT"]
+        # Check if we have an active trade
+        active_trade = st.session_state.active_trade
         
-        if signal and signal in valid_signals:
-            # Add to history regardless of last_sig_key to ensure all signals appear
-            # Only skip if exact same timestamp already exists
-            existing_timestamps = [s["timestamp"] for s in st.session_state.signal_history]
-            current_ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+        if active_trade:
+            # We have an active trade - check for exit conditions first
+            exit_result = check_trade_exit(active_trade, price)
             
-            if current_ts_str not in existing_timestamps:
-                # Calculate confidence and levels based on strategy
-                if strategy_choice == "Turtle Trading":
-                    confidence = calculate_confidence(df, entry, exit_p)
-                    sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
-                else:
-                    # For scalping strategies, use simplified confidence
-                    confidence = 75.0  # Default confidence for scalping
-                    sl_tp = ScalpingStrategies.calculate_stop_loss_take_profit(
-                        signal, price, df, strategy_choice
-                    )
-                
-                # Increment daily trade counter for entry signals
-                if signal in ["ENTER_LONG", "ENTER_SHORT"]:
-                    st.session_state.daily_trades += 1
-                
-                # Add to history with strategy name
-                signal_entry = {
-                    "timestamp": current_ts_str,
-                    "signal": signal,
-                    "asset": asset_label,
-                    "interval": interval,
+            if exit_result == "TP_HIT":
+                # Take Profit hit - successful trade
+                st.session_state.trade_status = "TP_HIT"
+                st.session_state.last_market_update = {
+                    "type": "TP_HIT",
+                    "message": "✔VALID, Congrats",
                     "price": price,
-                    "confidence": confidence,
-                    "strategy": strategy_choice,
-                    "stop_loss": sl_tp.get("stop_loss"),
-                    "take_profit": sl_tp.get("take_profit"),
-                    "risk_reward": sl_tp.get("risk_reward", "1:1.5"),
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "exit_reason": "Take Profit"
                 }
-                st.session_state.signal_history.insert(0, signal_entry)
                 
-                # Keep only last 50 signals
-                if len(st.session_state.signal_history) > 50:
-                    st.session_state.signal_history = st.session_state.signal_history[:50]
+                # Update the active trade in history with exit info
+                for hist_entry in reversed(st.session_state.signal_history):
+                    if (hist_entry.get("entry_price") == active_trade["entry_price"] and 
+                        hist_entry.get("status") == "OPEN"):
+                        hist_entry["status"] = "CLOSED"
+                        hist_entry["exit_price"] = price
+                        hist_entry["exit_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                        hist_entry["exit_reason"] = "Take Profit"
+                        hist_entry["pnl"] = (price - active_trade["entry_price"]) / active_trade["entry_price"] * 100
+                        if active_trade["entry_type"] == "ENTER_SHORT":
+                            hist_entry["pnl"] = -hist_entry["pnl"]
+                        break
                 
-                # Send Telegram notification with updated format
-                if tg_token and tg_chat:
-                    try:
-                        notifier = TelegramNotifier(tg_token, tg_chat)
-                        tp = sl_tp.get("take_profit") if sl_tp.get("take_profit") else price
-                        sl = sl_tp.get("stop_loss") if sl_tp.get("stop_loss") else price * 0.99
-                        msg = format_scalping_signal_message(
-                            strategy_choice, signal, asset_label, price, interval,
-                            confidence, sl, tp
+                # Clear active trade
+                st.session_state.active_trade = None
+                log.info(f"TP HIT for {active_trade['entry_type']} at {price}. Profit!")
+                
+            elif exit_result == "SL_HIT":
+                # Stop Loss hit - failed trade
+                st.session_state.trade_status = "SL_HIT"
+                st.session_state.last_market_update = {
+                    "type": "SL_HIT",
+                    "message": "❌INVALID, Sorry for that",
+                    "price": price,
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "exit_reason": "Stop Loss"
+                }
+                
+                # Update the active trade in history with exit info
+                for hist_entry in reversed(st.session_state.signal_history):
+                    if (hist_entry.get("entry_price") == active_trade["entry_price"] and 
+                        hist_entry.get("status") == "OPEN"):
+                        hist_entry["status"] = "CLOSED"
+                        hist_entry["exit_price"] = price
+                        hist_entry["exit_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                        hist_entry["exit_reason"] = "Stop Loss"
+                        hist_entry["pnl"] = (price - active_trade["entry_price"]) / active_trade["entry_price"] * 100
+                        if active_trade["entry_type"] == "ENTER_SHORT":
+                            hist_entry["pnl"] = -hist_entry["pnl"]
+                        break
+                
+                # Clear active trade
+                st.session_state.active_trade = None
+                log.info(f"SL HIT for {active_trade['entry_type']} at {price}. Loss.")
+                
+            else:
+                # No exit - assess market status (GUARD/HOLD/WATCH)
+                status, confidence = assess_market_status(active_trade, price, df)
+                st.session_state.trade_status = status
+                
+                emoji_map = {"GUARD": "🛡", "HOLD": "🔒", "WATCH": "👁"}
+                st.session_state.last_market_update = {
+                    "type": status,
+                    "message": f"{emoji_map.get(status, '•')} {status}",
+                    "confidence": confidence,
+                    "price": price,
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "unrealized_pnl": calculate_unrealized_pnl(active_trade, price)
+                }
+            
+            # NO NEW ENTRY SIGNALS while trade is active
+            st.session_state.last_signal = f"Holding {active_trade['entry_type']}"
+            
+        else:
+            # No active trade - check for new entry signals
+            st.session_state.trade_status = "NO_TRADE"
+            st.session_state.last_market_update = None
+            
+            valid_entry_signals = ["ENTER_LONG", "ENTER_SHORT"]
+            
+            if signal and signal in valid_entry_signals:
+                # New entry signal detected!
+                existing_timestamps = [s.get("timestamp") for s in st.session_state.signal_history]
+                current_ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Only process if not already recorded
+                if current_ts_str not in existing_timestamps:
+                    # Get user's RR ratio from session state
+                    user_rr = st.session_state.user_rr_ratio
+                    
+                    # Calculate confidence and levels based on strategy
+                    if strategy_choice == "Turtle Trading":
+                        confidence = calculate_confidence(df, entry, exit_p)
+                        sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p, rr_ratio=user_rr)
+                    else:
+                        confidence = 75.0
+                        sl_tp = ScalpingStrategies.calculate_stop_loss_take_profit(
+                            signal, price, df, strategy_choice, rr_ratio=user_rr
                         )
-                        notifier.send(msg)
-                        log.info("Signal sent to Telegram: %s | %s", strategy_choice, signal)
-                    except Exception as e:
-                        log.error("Telegram send failed: %s", e)
-                
-                log.info("NEW SIGNAL: %s | %s | %s | %.2f | Confidence: %.1f%%", 
-                        strategy_choice, signal, asset_label, price, confidence)
-                
-                # Update last_sig_key after processing
-                st.session_state.last_sig_key = sig_key
+                    
+                    # Get TP and SL values
+                    stop_loss = sl_tp.get("stop_loss")
+                    take_profit = sl_tp.get("take_profit_1") or sl_tp.get("take_profit")
+                    risk_reward = sl_tp.get("risk_reward_1") or sl_tp.get("risk_reward", f"1:{user_rr:.1f}")
+                    
+                    # Create active trade record
+                    st.session_state.active_trade = {
+                        "entry_type": signal,
+                        "entry_price": price,
+                        "entry_time": current_ts_str,
+                        "stop_loss": stop_loss,
+                        "take_profit": take_profit,
+                        "strategy": strategy_choice,
+                        "asset": asset_label,
+                        "interval": interval,
+                        "initial_confidence": confidence
+                    }
+                    
+                    st.session_state.trade_status = "IN_TRADE"
+                    st.session_state.last_signal = signal
+                    
+                    # Add to signal history
+                    signal_entry = {
+                        "timestamp": current_ts_str,
+                        "signal": signal,
+                        "asset": asset_label,
+                        "interval": interval,
+                        "price": price,
+                        "entry_price": price,
+                        "confidence": confidence,
+                        "strategy": strategy_choice,
+                        "stop_loss": stop_loss,
+                        "take_profit_1": take_profit,
+                        "take_profit_2": sl_tp.get("take_profit_2"),
+                        "risk_reward_1": risk_reward,
+                        "risk_reward_2": sl_tp.get("risk_reward_2"),
+                        "status": "OPEN",
+                        "exit_price": None,
+                        "exit_time": None,
+                        "exit_reason": None,
+                        "pnl": None
+                    }
+                    st.session_state.signal_history.insert(0, signal_entry)
+                    
+                    # Keep only last 50 signals
+                    if len(st.session_state.signal_history) > 50:
+                        st.session_state.signal_history = st.session_state.signal_history[:50]
+                    
+                    # Increment daily trade counter
+                    st.session_state.daily_trades += 1
+                    
+                    # Send Telegram notification
+                    if tg_token and tg_chat:
+                        try:
+                            notifier = TelegramNotifier(tg_token, tg_chat)
+                            msg = format_scalping_signal_message(
+                                strategy_choice, signal, asset_label, price, interval,
+                                confidence, stop_loss or price * 0.99, take_profit or price * 1.02,
+                                rr_ratio=user_rr
+                            )
+                            notifier.send(msg)
+                            log.info("Entry signal sent to Telegram: %s | %s", strategy_choice, signal)
+                        except Exception as e:
+                            log.error("Telegram send failed: %s", e)
+                    
+                    log.info("NEW ENTRY: %s | %s | %s | %.2f | Confidence: %.1f%%", 
+                            strategy_choice, signal, asset_label, price, confidence)
+            
+            elif signal and signal in ["EXIT_LONG", "EXIT_SHORT"]:
+                # Exit signal without entry - just log it, don't create trade
+                st.session_state.last_signal = f"{signal} (no active position)"
         
         return df, asset_label
         
@@ -335,9 +576,25 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
         return None, None
 
 
+def calculate_unrealized_pnl(active_trade: dict, current_price: float) -> float:
+    """Calculate unrealized PnL percentage for active trade."""
+    if not active_trade:
+        return 0.0
+    
+    entry_price = active_trade["entry_price"]
+    entry_type = active_trade["entry_type"]
+    
+    if entry_type == "ENTER_LONG":
+        pnl = (current_price - entry_price) / entry_price * 100
+    else:
+        pnl = (entry_price - current_price) / entry_price * 100
+    
+    return round(pnl, 2)
+
+
 def format_scalping_signal_message(strategy: str, signal: str, asset: str, price: float, 
                                    interval: str, confidence: float, stop_loss: float, 
-                                   take_profit: float) -> str:
+                                   take_profit: float, rr_ratio: float = 1.5) -> str:
     """Format a rich Markdown alert message for scalping strategies with full details."""
     emoji_map = {
         "ENTER_LONG":  "🟢",
@@ -363,7 +620,7 @@ def format_scalping_signal_message(strategy: str, signal: str, asset: str, price
         f"Confidence: `{confidence:.1f}%`\n"
         f"Stop Loss: `{stop_loss:,.5f}`\n"
         f"Take Profit: `{take_profit:,.5f}`\n"
-        f"Risk/Reward: `1:1.5`"
+        f"Risk/Reward: `1:{rr_ratio:.1f}`"
     )
 
 
@@ -580,6 +837,33 @@ with st.sidebar:
         entry = 20
         exit_p = 10
     
+    # Risk/Reward Ratio Configuration
+    st.subheader("💰 Risk Management")
+    
+    # Define optimal RR ratios for each strategy/timeframe combination
+    optimal_rr_map = {
+        "Turtle Trading": {"1m": 1.5, "5m": 2.0, "15m": 2.0, "30m": 2.5, "1h": 2.5, "4h": 3.0, "1d": 3.0},
+        "1-Minute Scalping": {"1m": 1.5, "5m": 1.5, "15m": 2.0, "30m": 2.0, "1h": 2.5, "4h": 2.5, "1d": 3.0},
+        "MA Ribbon Entry": {"1m": 1.5, "5m": 2.0, "15m": 2.0, "30m": 2.5, "1h": 2.5, "4h": 3.0, "1d": 3.0},
+        "Bollinger Band Scalping": {"1m": 1.5, "5m": 1.5, "15m": 2.0, "30m": 2.0, "1h": 2.5, "4h": 2.5, "1d": 3.0}
+    }
+    
+    default_rr = optimal_rr_map.get(strategy_choice, {}).get(interval, 2.0)
+    
+    st.caption(f"📊 Optimal R:R for {strategy_choice} on {interval}: **1:{default_rr:.1f}**")
+    
+    user_rr_ratio = st.number_input(
+        "Risk/Reward Ratio (1:X)",
+        min_value=1.0,
+        max_value=5.0,
+        value=st.session_state.user_rr_ratio,
+        step=0.1,
+        help="Set your desired risk/reward ratio. The optimal ratio for your strategy and timeframe is shown above."
+    )
+    
+    # Update session state with user's RR ratio
+    st.session_state.user_rr_ratio = user_rr_ratio
+    
     st.subheader("Scanner")
     scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
     
@@ -608,6 +892,51 @@ with st.sidebar:
                 st.error("❌ Telegram API returned an error")
         except Exception as e:
             st.error(f"❌ Test failed: {str(e)}")
+    
+    # Test Signal Button - generates a fake signal with user's settings
+    if st.button("🧪 Test Signal", type="secondary", use_container_width=True):
+        try:
+            # Generate a fake signal with all user settings
+            fake_price = 2000.00 if mode == "gold" else 50000.00
+            fake_sl = fake_price * 0.98
+            fake_tp = fake_price + (fake_price - fake_sl) * st.session_state.user_rr_ratio
+            fake_confidence = 75.0
+            
+            # Create fake signal message
+            if strategy_choice == "Turtle Trading":
+                msg = format_signal_message(
+                    "ENTER_LONG", 
+                    symbol if mode == "crypto" else "XAUUSD", 
+                    fake_price, 
+                    interval,
+                    fake_confidence,
+                    fake_sl,
+                    fake_tp,
+                    rr_ratio=st.session_state.user_rr_ratio
+                )
+            else:
+                msg = format_scalping_signal_message(
+                    strategy_choice,
+                    "ENTER_LONG",
+                    symbol if mode == "crypto" else "XAUUSD",
+                    fake_price,
+                    interval,
+                    fake_confidence,
+                    fake_sl,
+                    fake_tp,
+                    rr_ratio=st.session_state.user_rr_ratio
+                )
+            
+            # Send via Telegram
+            notifier = TelegramNotifier(tg_token, tg_chat)
+            send_result = notifier.send(msg)
+            
+            if send_result:
+                st.success(f"✅ Test signal sent to Telegram!\n\n**Signal Details:**\n- Type: ENTER_LONG\n- Price: {fake_price:.2f}\n- SL: {fake_sl:.2f}\n- TP: {fake_tp:.2f}\n- R:R: 1:{st.session_state.user_rr_ratio:.1f}\n- Strategy: {strategy_choice}")
+            else:
+                st.error("❌ Failed to send test signal")
+        except Exception as e:
+            st.error(f"❌ Test signal failed: {str(e)}")
     
     st.divider()
     
@@ -648,17 +977,88 @@ with col2:
 with col3:
     last_sig = st.session_state.last_signal
     if last_sig:
-        emoji = {"ENTER_LONG": "🟢", "ENTER_SHORT": "🔴", "EXIT_LONG": "🟡", "EXIT_SHORT": "🟡"}.get(last_sig, "⚪")
+        # Handle different signal types including holding states
+        if "Holding" in last_sig:
+            emoji = "🔒"
+        else:
+            emoji = {"ENTER_LONG": "🟢", "ENTER_SHORT": "🔴", "EXIT_LONG": "🟡", "EXIT_SHORT": "🟡"}.get(last_sig.split()[0], "⚪")
         st.metric("Last Signal", f"{emoji} {last_sig}")
     else:
         st.metric("Last Signal", "—")
 with col4:
     st.metric("Last Check", st.session_state.last_check or "—")
 with col5:
-    st.metric("Strategy", strategy_choice.split()[0])
+    # Show trade status instead of just strategy
+    trade_status = st.session_state.trade_status
+    if trade_status == "NO_TRADE":
+        st.metric("Trade Status", "No Trade")
+    elif trade_status == "IN_TRADE":
+        st.metric("Trade Status", "🔵 In Trade")
+    elif trade_status in ["GUARD", "HOLD", "WATCH"]:
+        emoji_map = {"GUARD": "🛡", "HOLD": "🔒", "WATCH": "👁"}
+        st.metric("Trade Status", f"{emoji_map.get(trade_status)} {trade_status}")
+    elif trade_status == "TP_HIT":
+        st.metric("Trade Status", "✔ TP Hit")
+    elif trade_status == "SL_HIT":
+        st.metric("Trade Status", "❌ SL Hit")
+    else:
+        st.metric("Strategy", strategy_choice.split()[0])
 
 if st.session_state.error:
     st.error(f"❌ Error: {st.session_state.error}")
+
+# ── MARKET STATUS ALERT BOX ────────────────────────────────────────────────────
+# Display real-time market status updates (GUARD/HOLD/WATCH/TP/SL)
+if st.session_state.last_market_update:
+    update = st.session_state.last_market_update
+    update_type = update.get("type")
+    
+    if update_type == "TP_HIT":
+        st.success(f"## ✔VALID, Congrats! Take Profit hit at ${update['price']:,.2f}")
+        st.json({
+            "Exit Reason": update.get("exit_reason"),
+            "Exit Time": update.get("timestamp"),
+            "Exit Price": f"${update['price']:,.2f}"
+        })
+    elif update_type == "SL_HIT":
+        st.error(f"## ❌INVALID, Sorry for that. Stop Loss hit at ${update['price']:,.2f}")
+        st.json({
+            "Exit Reason": update.get("exit_reason"),
+            "Exit Time": update.get("timestamp"),
+            "Exit Price": f"${update['price']:,.2f}"
+        })
+    elif update_type in ["GUARD", "HOLD", "WATCH"]:
+        emoji_map = {"GUARD": "🛡", "HOLD": "🔒", "WATCH": "👁"}
+        color_map = {"GUARD": "warning", "HOLD": "info", "WATCH": "secondary"}
+        
+        with st.container():
+            if update_type == "GUARD":
+                st.warning(f"### 🛡GUARD - Market moving against entry. Stay vigilant!")
+            elif update_type == "HOLD":
+                st.info(f"### 🔒HOLD - Market following prediction. Hold position.")
+            else:  # WATCH
+                st.markdown(f"### 👁WATCH - Market indecisive. No clear movement.")
+            
+            # Show confidence and PnL
+            col_conf, col_pnl = st.columns(2)
+            with col_conf:
+                conf = update.get("confidence", 0)
+                if conf >= 70:
+                    st.success(f"**Confidence:** {conf:.1f}%")
+                elif conf >= 50:
+                    st.warning(f"**Confidence:** {conf:.1f}%")
+                else:
+                    st.error(f"**Confidence:** {conf:.1f}%")
+            with col_pnl:
+                pnl = update.get("unrealized_pnl", 0)
+                if pnl > 0:
+                    st.success(f"**Unrealized PnL:** +{pnl:.2f}%")
+                elif pnl < 0:
+                    st.error(f"**Unrealized PnL:** {pnl:.2f}%")
+                else:
+                    st.info(f"**Unrealized PnL:** {pnl:.2f}%")
+            
+            st.caption(f"Last update: {update.get('timestamp')} | Price: ${update.get('price', 0):,.2f}")
 
 # Main chart and signals
 chart_col, signals_col = st.columns([2, 1])
@@ -788,16 +1188,28 @@ if st.session_state.signal_history:
     # Convert to DataFrame for display
     history_df = pd.DataFrame(st.session_state.signal_history)
     
-    # Format for display
-    display_df = history_df[[
+    # Format for display - include status and exit info
+    display_cols = [
         "timestamp", "signal", "asset", "interval", "price", 
-        "confidence", "stop_loss", "take_profit_1", "take_profit_2"
-    ]].copy()
-    
-    display_df.columns = [
-        "Time", "Signal", "Asset", "TF", "Entry Price",
-        "Confidence %", "Stop Loss", "TP 1", "TP 2"
+        "confidence", "stop_loss", "take_profit_1", "status"
     ]
+    
+    # Only show columns that exist
+    available_cols = [col for col in display_cols if col in history_df.columns]
+    display_df = history_df[available_cols].copy()
+    
+    new_columns = {
+        "timestamp": "Time", 
+        "signal": "Signal", 
+        "asset": "Asset", 
+        "interval": "TF", 
+        "price": "Entry Price",
+        "confidence": "Confidence %", 
+        "stop_loss": "Stop Loss", 
+        "take_profit_1": "TP 1",
+        "status": "Status"
+    }
+    display_df.rename(columns=new_columns, inplace=True)
     
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     

@@ -314,16 +314,25 @@ class ScalpingStrategies:
         price: float,
         df: pd.DataFrame,
         strategy_name: str,
-        atr_period: int = 14
+        atr_period: int = 14,
+        rr_ratio: float = 1.5
     ) -> Dict[str, Optional[float]]:
         """
         Calculate Stop Loss and Take Profit based on strategy and recent swing points.
         
-        Uses ATR for dynamic stops and 1:1.5 risk-reward ratio for targets.
+        Uses ATR for dynamic stops and user-defined risk-reward ratio for targets.
+        
+        Args:
+            signal: Entry signal type
+            price: Current entry price
+            df: DataFrame with OHLC data
+            strategy_name: Name of the strategy
+            atr_period: ATR calculation period
+            rr_ratio: Risk/reward ratio multiplier (e.g., 1.5 for 1:1.5, 2.0 for 1:2)
         
         Returns dict with:
             - stop_loss: SL price level
-            - take_profit: TP price level (1:1.5 R:R)
+            - take_profit: TP price level (based on rr_ratio)
             - risk_reward: Risk-reward ratio string
         """
         if len(df) < atr_period:
@@ -335,7 +344,7 @@ class ScalpingStrategies:
         result = {
             'stop_loss': None,
             'take_profit': None,
-            'risk_reward': '1:1.5',
+            'risk_reward': f'1:{rr_ratio:.1f}',
             'sl_distance': None,
             'tp_distance': None,
         }
@@ -350,8 +359,8 @@ class ScalpingStrategies:
             result['stop_loss'] = round(price - sl_distance, 5)
             result['sl_distance'] = sl_distance
             
-            # Take profit at 1:1.5 R:R
-            tp_distance = sl_distance * 1.5
+            # Take profit at user-defined R:R
+            tp_distance = sl_distance * rr_ratio
             result['take_profit'] = round(price + tp_distance, 5)
             result['tp_distance'] = tp_distance
             
@@ -365,8 +374,8 @@ class ScalpingStrategies:
             result['stop_loss'] = round(price + sl_distance, 5)
             result['sl_distance'] = sl_distance
             
-            # Take profit at 1:1.5 R:R
-            tp_distance = sl_distance * 1.5
+            # Take profit at user-defined R:R
+            tp_distance = sl_distance * rr_ratio
             result['take_profit'] = round(price - tp_distance, 5)
             result['tp_distance'] = tp_distance
         
