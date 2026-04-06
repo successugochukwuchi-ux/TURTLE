@@ -1,6 +1,7 @@
 """
 Turtle Trader — Streamlit App for Community Cloud
 Real-time Turtle Trading scanner with confidence levels, stop loss & take profit suggestions.
+Now includes Forex Scalping Strategies: 1-Minute, MA Ribbon, Bollinger Bands
 """
 
 import streamlit as st
@@ -14,6 +15,7 @@ from plotly.subplots import make_subplots
 
 from core.data_fetcher import fetch_gold, fetch_crypto
 from core.turtle_logic import compute_turtle_signals, get_latest_signal
+from core.scalping_strategies import ScalpingStrategies
 from utils.notifier import TelegramNotifier
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -26,8 +28,8 @@ log = logging.getLogger(__name__)
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="🐢 Turtle Trader",
-    page_icon="🐢",
+    page_title="🐢 Turtle Trader + Forex Scalping",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -47,6 +49,11 @@ if "last_sig_key" not in st.session_state:
     st.session_state.last_sig_key = None
 if "error" not in st.session_state:
     st.session_state.error = None
+# NEW: Daily trade counter for risk guardrail
+if "daily_trades" not in st.session_state:
+    st.session_state.daily_trades = 0
+if "session_date" not in st.session_state:
+    st.session_state.session_date = datetime.now().date()
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -213,8 +220,12 @@ def format_signal_message(signal: str, asset: str, price: float, interval: str,
 
 
 def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: int,
-                     tg_token: str, tg_chat: str, tv_username: str, tv_password: str):
-    """Run a single scan iteration and update session state."""
+                     tg_token: str, tg_chat: str, tv_username: str, tv_password: str,
+                     strategy_choice: str = "Turtle Trading"):
+    """Run a single scan iteration and update session state.
+    
+    Supports both Turtle Trading and Forex Scalping strategies.
+    """
     try:
         # Inject TV credentials
         import core.data_fetcher as _df_mod
@@ -229,7 +240,13 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
             df = fetch_crypto(symbol, interval=interval, lookback_bars=lookback)
             asset_label = symbol
         
-        df = compute_turtle_signals(df, entry_period=entry, exit_period=exit_p)
+        # Run appropriate strategy
+        if strategy_choice == "Turtle Trading":
+            df = compute_turtle_signals(df, entry_period=entry, exit_period=exit_p)
+        else:
+            # Use Forex scalping strategies
+            df = ScalpingStrategies.run_strategy(df, strategy_choice, interval)
+        
         info = get_latest_signal(df)
         
         price = info["close"]
@@ -255,11 +272,22 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
             current_ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
             
             if current_ts_str not in existing_timestamps:
-                # Calculate confidence and levels
-                confidence = calculate_confidence(df, entry, exit_p)
-                sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
+                # Calculate confidence and levels based on strategy
+                if strategy_choice == "Turtle Trading":
+                    confidence = calculate_confidence(df, entry, exit_p)
+                    sl_tp = calculate_stop_loss_take_profit(signal, price, df, entry, exit_p)
+                else:
+                    # For scalping strategies, use simplified confidence
+                    confidence = 75.0  # Default confidence for scalping
+                    sl_tp = ScalpingStrategies.calculate_stop_loss_take_profit(
+                        signal, price, df, strategy_choice
+                    )
                 
-                # Add to history
+                # Increment daily trade counter for entry signals
+                if signal in ["ENTER_LONG", "ENTER_SHORT"]:
+                    st.session_state.daily_trades += 1
+                
+                # Add to history with strategy name
                 signal_entry = {
                     "timestamp": current_ts_str,
                     "signal": signal,
@@ -267,11 +295,10 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
                     "interval": interval,
                     "price": price,
                     "confidence": confidence,
-                    "stop_loss": sl_tp["stop_loss"],
-                    "take_profit_1": sl_tp["take_profit_1"],
-                    "take_profit_2": sl_tp["take_profit_2"],
-                    "risk_reward_1": sl_tp["risk_reward_1"],
-                    "risk_reward_2": sl_tp["risk_reward_2"]
+                    "strategy": strategy_choice,
+                    "stop_loss": sl_tp.get("stop_loss"),
+                    "take_profit": sl_tp.get("take_profit"),
+                    "risk_reward": sl_tp.get("risk_reward", "1:1.5"),
                 }
                 st.session_state.signal_history.insert(0, signal_entry)
                 
@@ -279,20 +306,23 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
                 if len(st.session_state.signal_history) > 50:
                     st.session_state.signal_history = st.session_state.signal_history[:50]
                 
-                # Send Telegram notification
+                # Send Telegram notification with updated format
                 if tg_token and tg_chat:
                     try:
                         notifier = TelegramNotifier(tg_token, tg_chat)
-                        tp = sl_tp["take_profit_1"] if sl_tp["take_profit_1"] else price
-                        msg = format_signal_message(signal, asset_label, price, interval,
-                                                   confidence, sl_tp["stop_loss"], tp)
+                        tp = sl_tp.get("take_profit") if sl_tp.get("take_profit") else price
+                        sl = sl_tp.get("stop_loss") if sl_tp.get("stop_loss") else price * 0.99
+                        msg = format_scalping_signal_message(
+                            strategy_choice, signal, asset_label, price, interval,
+                            confidence, sl, tp
+                        )
                         notifier.send(msg)
-                        log.info("Signal sent to Telegram: %s", signal)
+                        log.info("Signal sent to Telegram: %s | %s", strategy_choice, signal)
                     except Exception as e:
                         log.error("Telegram send failed: %s", e)
                 
-                log.info("NEW SIGNAL: %s | %s | %.2f | Confidence: %.1f%%", 
-                        signal, asset_label, price, confidence)
+                log.info("NEW SIGNAL: %s | %s | %s | %.2f | Confidence: %.1f%%", 
+                        strategy_choice, signal, asset_label, price, confidence)
                 
                 # Update last_sig_key after processing
                 st.session_state.last_sig_key = sig_key
@@ -303,6 +333,38 @@ def scan_for_signals(mode: str, symbol: str, interval: str, entry: int, exit_p: 
         st.session_state.error = str(e)
         log.error("Scan error: %s", e)
         return None, None
+
+
+def format_scalping_signal_message(strategy: str, signal: str, asset: str, price: float, 
+                                   interval: str, confidence: float, stop_loss: float, 
+                                   take_profit: float) -> str:
+    """Format a rich Markdown alert message for scalping strategies with full details."""
+    emoji_map = {
+        "ENTER_LONG":  "🟢",
+        "ENTER_SHORT": "🔴",
+        "EXIT_LONG":   "🟡",
+        "EXIT_SHORT":  "🟡",
+    }
+    emoji = emoji_map.get(signal, "⚪")
+    
+    # Strategy icon
+    strategy_icon = {
+        "1-Minute Scalping": "⚡",
+        "MA Ribbon Entry": "🎗️",
+        "Bollinger Band Scalping": "📊",
+        "Turtle Trading": "🐢",
+    }.get(strategy, "📈")
+    
+    return (
+        f"{emoji} {strategy_icon} *{strategy}*\n\n"
+        f"{emoji} *{signal.replace('_', ' ')}*\\n"
+        f"Asset: `{asset}` · TF: `{interval}`\\n"
+        f"Price: `{price:,.5f}`\\n"
+        f"Confidence: `{confidence:.1f}%`\\n"
+        f"Stop Loss: `{stop_loss:,.5f}`\\n"
+        f"Take Profit: `{take_profit:,.5f}`\\n"
+        f"Risk/Reward: `1:1.5`"
+    )
 
 
 def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure:
@@ -434,6 +496,15 @@ def create_chart(df: pd.DataFrame, asset_label: str, signals: list) -> go.Figure
 with st.sidebar:
     st.title("⚙️ Settings")
     
+    # NEW: Strategy Selection
+    st.subheader("📊 Strategy Selection")
+    strategy_choice = st.selectbox(
+        "Choose Strategy",
+        ["Turtle Trading", "1-Minute Scalping", "MA Ribbon Entry", "Bollinger Band Scalping"],
+        index=0,
+        help="Select your trading strategy. Each has optimized parameters for different timeframes."
+    )
+    
     st.subheader("Market")
     mode = st.radio("Asset Type", ["gold", "crypto"], index=0, horizontal=True)
     
@@ -448,9 +519,36 @@ with st.sidebar:
                            ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
                            index=4)
     
-    st.subheader("Turtle Parameters")
-    entry = st.slider("Entry Period", 5, 50, 20, 1)
-    exit_p = st.slider("Exit Period", 5, 50, 10, 1)
+    # Show strategy-specific parameters
+    if strategy_choice == "Turtle Trading":
+        st.subheader("Turtle Parameters")
+        entry = st.slider("Entry Period", 5, 50, 20, 1)
+        exit_p = st.slider("Exit Period", 5, 50, 10, 1)
+    elif strategy_choice == "1-Minute Scalping":
+        st.subheader("EMA + Stochastic Parameters")
+        st.info("Uses 13 & 26 EMA + Stochastic (14,3,3)\n\nOptimized levels for timeframe:")
+        if interval in ['5m', '15m']:
+            st.success("Stochastic levels: 25/75 (tightened)")
+        elif interval in ['30m', '1h']:
+            st.success("Stochastic levels: 30/70 (tightened)")
+        elif interval in ['4h', '1d']:
+            st.success("Stochastic levels: 35/65 (tightened)")
+        entry = 20  # Default for lookback
+        exit_p = 10
+    elif strategy_choice == "MA Ribbon Entry":
+        st.subheader("MA Ribbon Parameters")
+        st.info("Uses 5, 8, 13 SMA ribbon\n\nBuy when ribbon fans bullish + pullback to 5/8 SMA")
+        entry = 15
+        exit_p = 10
+    elif strategy_choice == "Bollinger Band Scalping":
+        st.subheader("Bollinger Band Parameters")
+        st.info("Uses 20 SMA ± 2 StdDev\n\nBuy when price pierces band & closes back inside")
+        if interval in ['30m', '1h']:
+            st.success("Band width: 2.2 StdDev (wider)")
+        elif interval in ['4h', '1d']:
+            st.success("Band width: 2.5 StdDev (wider)")
+        entry = 20
+        exit_p = 10
     
     st.subheader("Scanner")
     scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
@@ -493,11 +591,25 @@ with st.sidebar:
             st.session_state.last_sig_key = None
 
 # ── Main Content ──────────────────────────────────────────────────────────────
-st.title("🐢 Turtle Trader")
-st.markdown("**Real-time Turtle Trading Channel Scanner** with confidence levels & risk management")
+st.title("🐢 Turtle Trader + Forex Scalping")
+st.markdown(f"**Multi-Strategy Scanner**: {strategy_choice} | Real-time signals with confidence levels & risk management")
+
+# NEW: Daily Trade Counter Warning (Risk Guardrail)
+today = datetime.now().date()
+if st.session_state.session_date != today:
+    st.session_state.session_date = today
+    st.session_state.daily_trades = 0
+
+MAX_DAILY_TRADES = 50
+if st.session_state.daily_trades >= MAX_DAILY_TRADES:
+    st.error(f"⚠️ **DAILY TRADE LIMIT REACHED**: You've executed {st.session_state.daily_trades} trades today. Consider stopping to avoid overtrading.")
+elif st.session_state.daily_trades >= MAX_DAILY_TRADES * 0.8:
+    st.warning(f"⚠️ **Approaching Daily Limit**: {st.session_state.daily_trades}/{MAX_DAILY_TRADES} trades today. Use caution.")
+else:
+    st.info(f"📊 **Daily Trades**: {st.session_state.daily_trades}/{MAX_DAILY_TRADES}")
 
 # Status bar
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     status_color = "🟢" if st.session_state.running else "🔴"
     st.metric("Status", f"{status_color} {'Running' if st.session_state.running else 'Stopped'}")
@@ -512,6 +624,8 @@ with col3:
         st.metric("Last Signal", "—")
 with col4:
     st.metric("Last Check", st.session_state.last_check or "—")
+with col5:
+    st.metric("Strategy", strategy_choice.split()[0])
 
 if st.session_state.error:
     st.error(f"❌ Error: {st.session_state.error}")
@@ -537,7 +651,8 @@ with chart_col:
             status_text.text("Scanning...")
             df, asset_label = scan_for_signals(
                 mode, symbol, interval, entry, exit_p,
-                tg_token, tg_chat, tv_username, tv_password
+                tg_token, tg_chat, tv_username, tv_password,
+                strategy_choice
             )
             
             if df is not None:
@@ -564,7 +679,8 @@ with chart_col:
         if st.button("🔍 Scan Now"):
             df, asset_label = scan_for_signals(
                 mode, symbol, interval, entry, exit_p,
-                tg_token, tg_chat, tv_username, tv_password
+                tg_token, tg_chat, tv_username, tv_password,
+                strategy_choice
             )
         
         if df is not None:
