@@ -243,3 +243,55 @@ def synthetic_ohlcv(bars=500, base_price=3300.0, volatility=0.005, seed=42, freq
 
 def synthetic_gold(bars=500, seed=42):
     return synthetic_ohlcv(bars=bars, base_price=3300.0, seed=seed)
+
+
+# ─── Unified fetch_data entry point ───────────────────────────────────────────
+
+def fetch_data(asset: str, timeframe: str, lookback_bars: int = 500) -> pd.DataFrame:
+    """
+    Unified data fetcher for all assets.
+    
+    Args:
+        asset: Asset name (e.g., "XAUUSD", "BTC/USDT", "ETH/USDT")
+        timeframe: Timeframe string (e.g., "1m", "5m", "1h", "4h", "1d")
+        lookback_bars: Number of bars to fetch
+        
+    Returns:
+        DataFrame with OHLCV data
+    """
+    asset_upper = asset.upper()
+    
+    # Gold / XAUUSD
+    if asset_upper in ["XAUUSD", "GOLD", "XAU/USD"]:
+        return fetch_gold(interval=timeframe, lookback_bars=lookback_bars)
+    
+    # Crypto pairs
+    crypto_assets = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", 
+                     "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT"]
+    
+    if any(crypto in asset_upper for crypto in ["/USDT", "/USD", "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "LINK", "DOT"]):
+        # Normalize symbol format
+        symbol = asset_upper.replace("_", "/")
+        if "USDT" not in symbol and "USD" not in symbol:
+            symbol = f"{symbol}/USDT"
+        return fetch_crypto(symbol=symbol, interval=timeframe, lookback_bars=lookback_bars)
+    
+    # Forex pairs via yfinance (if available)
+    forex_pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF"]
+    if asset_upper.replace("_", "/") in forex_pairs or asset_upper in forex_pairs:
+        symbol_yf = asset_upper.replace("/", "") + "=X"
+        try:
+            import yfinance as yf
+            yf_interval = _INTERVAL_MAP_YF.get(timeframe, "1h")
+            period = _PERIOD_MAP_YF.get(timeframe, "730d")
+            raw = yf.download(symbol_yf, period=period, interval=yf_interval, 
+                            progress=False, auto_adjust=True, multi_level_index=False)
+            if raw is not None and not raw.empty:
+                df = _clean_yf(raw)
+                return df.tail(lookback_bars)
+        except Exception as e:
+            log.warning(f"Forex fetch failed for {asset}: {e}")
+    
+    # Fallback to synthetic data
+    log.warning(f"No data source available for {asset}, using synthetic data")
+    return synthetic_ohlcv(bars=lookback_bars, freq=_CCXT_INTERVAL_MAP.get(timeframe, "1h"))
