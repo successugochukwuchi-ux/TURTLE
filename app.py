@@ -981,13 +981,32 @@ with chart_col:
     
     while st.session_state.running:
         status_text.text("Scanning...")
+        
+        # Reload config from CSV on each iteration to pick up latest changes
+        try:
+            fresh_config = pd.read_csv(CONFIG_FILE)
+            mode = get_config_value(fresh_config, 'mode', 'gold')
+            symbol = get_config_value(fresh_config, 'symbol', 'BTC/USDT')
+            interval = get_config_value(fresh_config, 'interval', '1h')
+            entry = int(get_config_value(fresh_config, 'entry_period', '20'))
+            exit_p = int(get_config_value(fresh_config, 'exit_period', '10'))
+            scan_interval = int(get_config_value(fresh_config, 'scan_interval', '60'))
+            risk_reward_ratio = float(get_config_value(fresh_config, 'risk_reward_ratio', '2.5'))
+            strategy_choice = get_config_value(fresh_config, 'strategy_choice', 'Turtle Trading')
+            tg_token = get_config_value(fresh_config, 'tg_token', '')
+            tg_chat = get_config_value(fresh_config, 'tg_chat', '')
+            tv_username = get_config_value(fresh_config, 'tv_username', '')
+            tv_password = get_config_value(fresh_config, 'tv_password', '')
+        except Exception as e:
+            log.warning(f"Failed to reload config: {e}")
+        
         df, asset_label = scan_for_signals(
             mode, symbol, interval, entry, exit_p,
             tg_token, tg_chat, tv_username, tv_password,
             strategy_choice, risk_reward_ratio
         )
         
-        if df is not None:
+        if df is not None and not df.empty:
             # Create signals list for chart - include ALL historical signals for this asset
             signals_list = []
             for sig in st.session_state.signal_history:  # All signals, not just last 20
@@ -999,8 +1018,10 @@ with chart_col:
                     })
             
             fig = create_chart(df, asset_label, signals_list, strategy_choice)
-            chart_placeholder.empty()  # Clear previous chart
             chart_placeholder.plotly_chart(fig, use_container_width=True, key=f"live_chart_{asset_label}_{int(time.time())}")
+        else:
+            # Show error message if no data
+            chart_placeholder.error(f"❌ No data available for {asset_label or 'chart'}. Check your connection or settings.")
         
         progress_bar.progress(100)
         status_text.text(f"Last scan: {datetime.now().strftime('%H:%M:%S')}")
