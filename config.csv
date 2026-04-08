@@ -1,0 +1,13 @@
+parameter,value
+strategy_choice,Turtle Trading
+mode,gold
+symbol,BTC/USDT
+interval,1h
+entry_period,20
+exit_period,10
+scan_interval,60
+risk_reward_ratio,2.5
+tv_username,
+tv_password,
+tg_token,8639500812:AAG2cLSiKyRVwazanOlN--PInxu4-m58ES0
+tg_chat,-5137913812

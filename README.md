@@ -1,84 +1,125 @@
-# 🐢 Turtle Trader - Streamlit Edition
+# 🐢 Turtle Trader + Forex Scalping System
 
-Real-time Turtle Trading Channel scanner with confidence levels, stop loss & take profit suggestions. Built for deployment on Streamlit Community Cloud.
+A multi-strategy trading signal scanner with Telegram integration, featuring:
+- **Turtle Trading** strategy
+- **1-Minute Scalping** (EMA + Stochastic)
+- **MA Ribbon Entry** 
+- **Bollinger Band Scalping**
 
-## Features
+## Architecture
 
-- **Real-time Scanning**: Continuously monitors XAUUSD (Gold) or Crypto markets
-- **Turtle Trading Strategy**: Implements the classic Turtle Trading Channel breakout system
-- **Confidence Levels**: Each signal includes a 0-100% confidence score based on:
-  - Breakout strength
-  - Channel width (narrower = stronger)
-  - Trend consistency
-- **Risk Management**: Automatic calculation of:
-  - Suggested Stop Loss (based on channel boundaries & ATR)
-  - Take Profit targets (2:1 and 3:1 risk-reward ratios)
-  - Risk-reward ratios displayed for each target
-- **Interactive Charts**: Plotly candlestick charts with Turtle channels overlay
-- **Telegram Alerts**: Optional real-time notifications to your Telegram
-- **Signal History**: Track all signals with full details, exportable to CSV
+The system consists of two Streamlit apps:
 
-## Deployment on Streamlit Community Cloud
+### 1. Main Scanner App (`app.py`)
+- **Auto-starts scanning** immediately when accessed
+- Loads all configuration from `config.csv`
+- Displays real-time charts and signals
+- Sends signals to Telegram automatically
+- **No user controls** - runs continuously
 
-1. **Push to GitHub**: Upload this repository to your GitHub account
+### 2. Control Panel (`control_panel.py`)
+- Web interface to configure bot parameters
+- Updates `config.csv` when settings are saved
+- Changes take effect on next app access
 
-2. **Deploy on Streamlit Cloud**:
-   - Go to [share.streamlit.io](https://share.streamlit.io)
-   - Click "New app"
-   - Select your repository and branch
-   - Set Main file path: `app.py`
-   - Click "Deploy!"
+### 3. Configuration File (`config.csv`)
+Stores all bot parameters:
+- Strategy selection
+- Market (Gold/Crypto) and symbol
+- Timeframe
+- Entry/Exit periods
+- Risk/Reward ratio
+- Scan interval
+- Telegram credentials
+- TradingView credentials (optional)
 
-3. **Configure Settings** (in the app sidebar):
-   - Select asset type (Gold or Crypto)
-   - Choose timeframe and Turtle parameters
-   - Add Telegram Bot token and Chat ID for alerts (optional)
-   - Add TradingView credentials for premium data (optional)
+## How to Use
 
-## Local Development
-
+### Step 1: Configure Your Bot
+Run the control panel:
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+streamlit run control_panel.py
+```
 
-# Run the app
+1. Choose your strategy
+2. Select market and timeframe
+3. Set risk/reward ratio
+4. Configure scan interval
+5. Enter Telegram bot credentials
+6. Click **"💾 Save Configuration"**
+
+### Step 2: Run the Scanner
+Run the main app:
+```bash
 streamlit run app.py
 ```
 
-## Configuration
+The app will:
+- Automatically load your configuration
+- Start scanning immediately
+- Display live charts
+- Send signals to Telegram when opportunities are detected
 
-### Turtle Parameters
-- **Entry Period** (default: 20): Lookback period for entry channel
-- **Exit Period** (default: 10): Lookback period for exit channel
+## Files
 
-### Scanner Settings
-- **Scan Interval**: How often to check for new signals (10-300 seconds)
+```
+/workspace/
+├── app.py                 # Main scanner app (auto-starts)
+├── control_panel.py       # Configuration interface
+├── config.csv             # Bot configuration (auto-created)
+├── core/
+│   ├── data_fetcher.py    # Market data retrieval
+│   ├── turtle_logic.py    # Turtle Trading signals
+│   └── scalping_strategies.py  # Forex scalping strategies
+└── utils/
+    └── notifier.py        # Telegram notifications
+```
 
-### Telegram Integration
-1. Create a bot via [@BotFather](https://t.me/BotFather)
-2. Get your bot token
-3. Get your chat ID (use [@userinfobot](https://t.me/userinfobot))
-4. Enter both in the sidebar
+## Configuration Parameters
 
-## Signal Types
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| strategy_choice | Trading strategy | Turtle Trading |
+| mode | Asset type (gold/crypto) | gold |
+| symbol | Crypto pair | BTC/USDT |
+| interval | Timeframe | 1h |
+| entry_period | Entry lookback period | 20 |
+| exit_period | Exit lookback period | 10 |
+| scan_interval | Seconds between scans | 60 |
+| risk_reward_ratio | R:R ratio for TP calculation | 2.5 |
+| tg_token | Telegram bot token | (required) |
+| tg_chat | Telegram chat ID | (required) |
+| tv_username | TradingView username | (optional) |
+| tv_password | TradingView password | (optional) |
 
-- 🟢 **ENTER_LONG**: Buy signal - price broke above entry channel
-- 🔴 **ENTER_SHORT**: Sell signal - price broke below entry channel  
-- 🟡 **EXIT_LONG**: Close long position - price broke below exit channel
-- 🟡 **EXIT_SHORT**: Close short position - price broke above exit channel
+## Deployment
 
-## How Confidence is Calculated
+### Local Development
+```bash
+pip install -r requirements.txt
+streamlit run control_panel.py  # Configure first
+streamlit run app.py            # Then run scanner
+```
 
-The confidence score (0-100%) is based on three factors:
+### Streamlit Cloud
+1. Connect your GitHub repository
+2. Set main file to `app.py`
+3. The app will auto-start on every visit
+4. Use `control_panel.py` to update settings
 
-1. **Breakout Strength** (0-40 points): How far price moved beyond the channel
-2. **Channel Width** (0-30 points): Narrower channels indicate stronger breakouts
-3. **Trend Consistency** (0-30 points): Recent price action alignment with signal direction
+## Features
 
-## Disclaimer
+✅ **Automatic Scanning** - No manual start required  
+✅ **Configurable Strategies** - 4 different trading strategies  
+✅ **Risk Management** - Customizable R:R ratios  
+✅ **Telegram Integration** - Real-time signal notifications  
+✅ **Live Charts** - Interactive Plotly charts with signal markers  
+✅ **Signal History** - Track all generated signals  
+✅ **Trade Tracking** - Monitor active trades and status  
 
-This tool is for educational and informational purposes only. Trading involves substantial risk of loss. Past performance does not guarantee future results. Always do your own research and consider consulting with a qualified financial advisor.
+## Notes
 
-## License
-
-MIT License
+- The main app (`app.py`) has **no controls** - it's designed to run continuously
+- All configuration changes must be made through `control_panel.py`
+- The app will create a default `config.csv` if none exists
+- Daily trade limit guardrail: 50 trades per day (configurable in code)
