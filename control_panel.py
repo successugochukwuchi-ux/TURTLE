@@ -1,12 +1,15 @@
 """
 Control Panel for Turtle Trader
 Allows users to configure bot parameters and update config.csv
+Now includes GitHub integration to push configuration changes to the repository.
 """
 
 import streamlit as st
 import pandas as pd
 import os
+import requests
 from datetime import datetime
+import base64
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -18,6 +21,9 @@ st.set_page_config(
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 CONFIG_FILE = "config.csv"
+GITHUB_REPO = "successugochukwuchi-ux/TURTLE"
+GITHUB_PAT = "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"
+GITHUB_BRANCH = "main"
 
 # ── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -47,10 +53,79 @@ def load_config():
 
 
 def save_config(config_dict):
-    """Save configuration to CSV file."""
+    """Save configuration to CSV file and push to GitHub."""
     df = pd.DataFrame(list(config_dict.items()), columns=['parameter', 'value'])
     df.to_csv(CONFIG_FILE, index=False)
-    return True
+    
+    # Push to GitHub
+    github_result = push_config_to_github(config_dict)
+    
+    return True, github_result
+
+
+def push_config_to_github(config_dict):
+    """Push config.csv to GitHub repository using Personal Access Token."""
+    try:
+        # Read the current config file content
+        with open(CONFIG_FILE, 'r') as f:
+            file_content = f.read()
+        
+        # Encode content to base64
+        encoded_content = base64.b64encode(file_content.encode()).decode('utf-8')
+        
+        # GitHub API endpoint
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{CONFIG_FILE}"
+        
+        # First, get the current file SHA (needed for update)
+        headers = {
+            "Authorization": f"token {GITHUB_PAT}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        # Try to get existing file info
+        response = requests.get(api_url, headers=headers, params={"ref": GITHUB_BRANCH})
+        
+        sha = None
+        if response.status_code == 200:
+            # File exists, get its SHA
+            file_info = response.json()
+            sha = file_info.get("sha")
+        
+        # Prepare the commit payload
+        commit_message = f"Update config.csv - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        payload = {
+            "message": commit_message,
+            "content": encoded_content,
+            "branch": GITHUB_BRANCH
+        }
+        
+        if sha:
+            payload["sha"] = sha
+        
+        # Put (create or update) the file
+        response = requests.put(api_url, headers=headers, json=payload)
+        
+        if response.status_code in [200, 201]:
+            result = response.json()
+            return {
+                "success": True,
+                "message": f"✅ Config pushed to GitHub successfully!",
+                "commit_url": result.get("commit", {}).get("html_url", ""),
+                "sha": result.get("content", {}).get("sha", "")[:7]
+            }
+        else:
+            error_msg = response.json().get("message", "Unknown error")
+            return {
+                "success": False,
+                "message": f"❌ GitHub push failed: {error_msg}",
+                "status_code": response.status_code
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"❌ GitHub push error: {str(e)}"
+        }
 
 
 def get_config_value(df, param_name, default=None):
@@ -185,11 +260,18 @@ if submitted:
         'tv_password': tv_password
     }
     
-    # Save to CSV
-    save_config(config_dict)
+    # Save to CSV and push to GitHub
+    _, github_result = save_config(config_dict)
     st.session_state.last_saved = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    st.success("✅ Configuration saved successfully!")
+    # Show save results
+    if github_result.get("success"):
+        st.success(github_result["message"])
+        if github_result.get("commit_url"):
+            st.markdown(f"[🔗 View commit on GitHub]({github_result['commit_url']})")
+    else:
+        st.warning(github_result.get("message", "GitHub push failed"))
+    
     st.info("📝 The main scanner app will use these settings on next access.")
     
     # Show summary
