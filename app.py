@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 from core.data_fetcher import fetch_gold, fetch_crypto
 from core.turtle_logic import compute_turtle_signals, get_latest_signal
 from core.scalping_strategies import ScalpingStrategies
+from core.config_loader import load_config_from_github
 from utils.notifier import TelegramNotifier
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -31,8 +32,42 @@ st.set_page_config(
     page_title="🐢 Turtle Trader + Forex Scalping",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
+
+# ── Load Configuration from GitHub ────────────────────────────────────────────
+@st.cache_resource
+def get_config():
+    """Load configuration from GitHub config.csv on app start."""
+    return load_config_from_github()
+
+# Load config at startup
+config = get_config()
+
+# Extract config values
+strategy_choice = config["strategy"]
+instrument = config["instrument"]
+timeframe = config["timeframe"]
+entry = config["entry_period"]
+exit_p = config["exit_period"]
+risk_reward_ratio = config["risk_reward_ratio"]
+scan_interval_seconds = config["scan_interval_seconds"]
+tg_token = config["tg_token"]
+tg_chat = config["tg_chat"]
+tv_username = config["tv_username"]
+tv_password = config["tv_password"]
+
+# Determine mode and symbol from instrument
+if instrument == "XAUUSD":
+    mode = "gold"
+    symbol = "XAUUSD"
+else:
+    mode = "crypto"
+    symbol = instrument
+
+interval = timeframe
+
+log.info(f"Loaded config from GitHub: Strategy={strategy_choice}, Instrument={instrument}, Timeframe={timeframe}")
 
 # ── Session State Initialization ──────────────────────────────────────────────
 if "running" not in st.session_state:
@@ -787,220 +822,6 @@ def create_chart(df: pd.DataFrame, asset_label: str, signals: list, strategy_nam
     
     return fig
 
-
-# ── Sidebar Configuration ─────────────────────────────────────────────────────
-with st.sidebar:
-    st.title("⚙️ Settings")
-    
-    # NEW: Strategy Selection
-    st.subheader("📊 Strategy Selection")
-    strategy_choice = st.selectbox(
-        "Choose Strategy",
-        ["Turtle Trading", "1-Minute Scalping", "MA Ribbon Entry", "Bollinger Band Scalping"],
-        index=0,
-        help="Select your trading strategy. Each has optimized parameters for different timeframes."
-    )
-    
-    st.subheader("Market")
-    mode = st.radio("Asset Type", ["gold", "crypto"], index=0, horizontal=True)
-    
-    if mode == "gold":
-        symbol = "XAUUSD"
-    else:
-        symbol = st.selectbox("Crypto Pair", 
-                             ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"],
-                             index=0)
-    
-    interval = st.selectbox("Timeframe", 
-                           ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
-                           index=4)
-    
-    # Show strategy-specific parameters
-    if strategy_choice == "Turtle Trading":
-        st.subheader("Turtle Parameters")
-        entry = st.slider("Entry Period", 5, 50, 20, 1)
-        exit_p = st.slider("Exit Period", 5, 50, 10, 1)
-    elif strategy_choice == "1-Minute Scalping":
-        st.subheader("EMA + Stochastic Parameters")
-        st.info("Uses 13 & 26 EMA + Stochastic (14,3,3)\n\nOptimized levels for timeframe:")
-        if interval in ['5m', '15m']:
-            st.success("Stochastic levels: 25/75 (tightened)")
-        elif interval in ['30m', '1h']:
-            st.success("Stochastic levels: 30/70 (tightened)")
-        elif interval in ['4h', '1d']:
-            st.success("Stochastic levels: 35/65 (tightened)")
-        entry = 20  # Default for lookback
-        exit_p = 10
-    elif strategy_choice == "MA Ribbon Entry":
-        st.subheader("MA Ribbon Parameters")
-        st.info("Uses 5, 8, 13 SMA ribbon\n\nBuy when ribbon fans bullish + pullback to 5/8 SMA")
-        entry = 15
-        exit_p = 10
-    elif strategy_choice == "Bollinger Band Scalping":
-        st.subheader("Bollinger Band Parameters")
-        st.info("Uses 20 SMA ± 2 StdDev\n\nBuy when price pierces band & closes back inside")
-        if interval in ['30m', '1h']:
-            st.success("Band width: 2.2 StdDev (wider)")
-        elif interval in ['4h', '1d']:
-            st.success("Band width: 2.5 StdDev (wider)")
-        entry = 20
-        exit_p = 10
-    
-    # Risk/Reward Ratio Input - Available for all strategies
-    st.subheader("Risk Management")
-    
-    # Define optimal R:R ratios per strategy/timeframe combination
-    optimal_rr_ratios = {
-        ("Turtle Trading", "1m"): 2.0,
-        ("Turtle Trading", "5m"): 2.0,
-        ("Turtle Trading", "15m"): 2.0,
-        ("Turtle Trading", "30m"): 2.5,
-        ("Turtle Trading", "1h"): 2.5,
-        ("Turtle Trading", "4h"): 3.0,
-        ("Turtle Trading", "1d"): 3.0,
-        ("1-Minute Scalping", "1m"): 1.5,
-        ("1-Minute Scalping", "5m"): 1.5,
-        ("1-Minute Scalping", "15m"): 2.0,
-        ("1-Minute Scalping", "30m"): 2.0,
-        ("1-Minute Scalping", "1h"): 2.5,
-        ("1-Minute Scalping", "4h"): 2.5,
-        ("1-Minute Scalping", "1d"): 3.0,
-        ("MA Ribbon Entry", "1m"): 1.5,
-        ("MA Ribbon Entry", "5m"): 1.5,
-        ("MA Ribbon Entry", "15m"): 2.0,
-        ("MA Ribbon Entry", "30m"): 2.0,
-        ("MA Ribbon Entry", "1h"): 2.5,
-        ("MA Ribbon Entry", "4h"): 2.5,
-        ("MA Ribbon Entry", "1d"): 3.0,
-        ("Bollinger Band Scalping", "1m"): 1.5,
-        ("Bollinger Band Scalping", "5m"): 1.5,
-        ("Bollinger Band Scalping", "15m"): 2.0,
-        ("Bollinger Band Scalping", "30m"): 2.0,
-        ("Bollinger Band Scalping", "1h"): 2.5,
-        ("Bollinger Band Scalping", "4h"): 2.5,
-        ("Bollinger Band Scalping", "1d"): 3.0,
-    }
-    
-    # Get optimal R:R for current strategy/timeframe
-    optimal_key = (strategy_choice, interval)
-    default_rr = optimal_rr_ratios.get(optimal_key, 2.0)
-    
-    st.caption(f"💡 Optimal R:R for {strategy_choice} on {interval}: **1:{default_rr}**")
-    
-    risk_reward_ratio = st.number_input(
-        "Risk/Reward Ratio",
-        min_value=0.5,
-        max_value=5.0,
-        value=default_rr,
-        step=0.1,
-        help="Set your desired risk/reward ratio. TP will be calculated as SL distance × this ratio."
-    )
-    
-    st.subheader("Scanner")
-    scan_interval = st.slider("Scan Interval (seconds)", 10, 300, 60, 10)
-    
-    st.subheader("Telegram Bot")
-    # Hardcoded credentials - for security, consider using st.secrets in production
-    tg_token = "8639500812:AAG2cLSiKyRVwazanOlN--PInxu4-m58ES0"
-    tg_chat = "-5137913812"
-    st.success("✅ Telegram bot configured and ready")
-    
-    st.subheader("TradingView (Optional)")
-    tv_username = st.text_input("TV Username", value="",
-                               help="TradingView username for premium data")
-    tv_password = st.text_input("TV Password", value="", type="password",
-                               help="TradingView password")
-    
-    st.divider()
-    
-    # Test Telegram Button - sends a test signal with all user settings
-    if st.button("📬 Test Signal", type="secondary", use_container_width=True):
-        try:
-            notifier = TelegramNotifier(tg_token, tg_chat)
-            
-            # Generate a fake test signal with all user settings
-            test_price = 2350.00 if mode == "gold" else 95000.00
-            test_signal = "ENTER_LONG"
-            test_confidence = 78.5
-            test_sl = test_price * 0.99 if test_signal == "ENTER_LONG" else test_price * 1.01
-            test_tp = test_price * 1.02 if test_signal == "ENTER_LONG" else test_price * 0.98
-            
-            # Format the test message with all user settings
-            test_msg = (
-                f"🧪 *TEST SIGNAL* 🧪\\n\\n"
-                f"{strategy_choice}\\n\\n"
-                f"🟢 *ENTER LONG*\\n"
-                f"Asset: `{symbol if mode == 'crypto' else 'XAUUSD'}` · TF: `{interval}`\\n"
-                f"Price: `{test_price:,.5f}`\\n"
-                f"Confidence: `{test_confidence:.1f}%`\\n"
-                f"Stop Loss: `{test_sl:,.5f}`\\n"
-                f"Take Profit: `{test_tp:,.5f}`\\n"
-                f"Risk/Reward: `1:{risk_reward_ratio}`\\n\\n"
-                f"_Settings:_\\n"
-                f"• Strategy: {strategy_choice}\\n"
-                f"• Timeframe: {interval}\\n"
-                f"• R:R Ratio: 1:{risk_reward_ratio}\\n"
-                f"• Entry Period: {entry}\\n"
-                f"• Exit Period: {exit_p}\\n\\n"
-                f"✅ _This is a TEST message to verify your signaling system works!_"
-            )
-            
-            result = notifier.send(test_msg)
-            if result:
-                st.success("✅ Test signal sent successfully! Check your Telegram.")
-            else:
-                st.error("❌ Telegram API returned an error")
-        except Exception as e:
-            st.error(f"❌ Test failed: {str(e)}")
-    
-    st.divider()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("▶️ Start", type="primary", use_container_width=True):
-            st.session_state.running = True
-    with col2:
-        if st.button("⏹️ Stop", type="secondary", use_container_width=True):
-            st.session_state.running = False
-            st.session_state.last_sig_key = None
-
-# ── Main Content ──────────────────────────────────────────────────────────────
-st.title("🐢 Turtle Trader + Forex Scalping")
-st.markdown(f"**Multi-Strategy Scanner**: {strategy_choice} | Real-time signals with confidence levels & risk management")
-
-# NEW: Daily Trade Counter Warning (Risk Guardrail)
-today = datetime.now().date()
-if st.session_state.session_date != today:
-    st.session_state.session_date = today
-    st.session_state.daily_trades = 0
-
-MAX_DAILY_TRADES = 50
-if st.session_state.daily_trades >= MAX_DAILY_TRADES:
-    st.error(f"⚠️ **DAILY TRADE LIMIT REACHED**: You've executed {st.session_state.daily_trades} trades today. Consider stopping to avoid overtrading.")
-elif st.session_state.daily_trades >= MAX_DAILY_TRADES * 0.8:
-    st.warning(f"⚠️ **Approaching Daily Limit**: {st.session_state.daily_trades}/{MAX_DAILY_TRADES} trades today. Use caution.")
-else:
-    st.info(f"📊 **Daily Trades**: {st.session_state.daily_trades}/{MAX_DAILY_TRADES}")
-
-# Status bar
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    status_color = "🟢" if st.session_state.running else "🔴"
-    st.metric("Status", f"{status_color} {'Running' if st.session_state.running else 'Stopped'}")
-with col2:
-    st.metric("Last Price", f"${st.session_state.last_price:,.2f}" if st.session_state.last_price else "—")
-with col3:
-    last_sig = st.session_state.last_signal
-    if last_sig:
-        # Handle different signal types including holding states
-        if "Holding" in last_sig:
-            emoji = "🔒"
-        else:
-            emoji = {"ENTER_LONG": "🟢", "ENTER_SHORT": "🔴", "EXIT_LONG": "🟡", "EXIT_SHORT": "🟡"}.get(last_sig.split()[0], "⚪")
-        st.metric("Last Signal", f"{emoji} {last_sig}")
-    else:
-        st.metric("Last Signal", "—")
-with col4:
     st.metric("Last Check", st.session_state.last_check or "—")
 with col5:
     # Show trade status instead of just strategy
@@ -1244,3 +1065,23 @@ st.markdown("""
     🐢 Turtle Trading Strategy · Built with Streamlit
 </div>
 """, unsafe_allow_html=True)
+
+# ── Main Content ──────────────────────────────────────────────────────────────
+st.title("🐢 Turtle Trader + Forex Scalping")
+st.markdown(f"**Multi-Strategy Scanner**: {strategy_choice} | Real-time signals with confidence levels & risk management")
+
+# Configuration info banner
+st.info(f"""
+**Active Configuration** (from config.csv):
+- Strategy: **{strategy_choice}** | Instrument: **{instrument}** | Timeframe: **{timeframe}**
+- Entry Period: **{entry}** | Exit Period: **{exit_p}** | Risk/Reward: **1:{risk_reward_ratio}**
+- Scan Interval: **{scan_interval_seconds}s**
+
+ℹ️ To change settings, use the [Control Panel](control_panel.py) app. The scanner starts automatically on page load!
+""")
+
+# Auto-start scanning
+if "auto_started" not in st.session_state:
+    st.session_state.running = True
+    st.session_state.auto_started = True
+    log.info("Scanner auto-started on page load!")

@@ -1,0 +1,2 @@
+strategy,instrument,timeframe,entry_period,exit_period,risk_reward_ratio,scan_interval_seconds,tg_token,tg_chat,tv_username,tv_password
+Turtle Trading,XAUUSD,1h,20,10,2.5,60,8639500812:AAG2cLSiKyRVwazanOlN--PInxu4-m58ES0,-5137913812,,
